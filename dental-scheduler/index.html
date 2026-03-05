@@ -1,0 +1,875 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>チェア別スタッフ配置 v3</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;700;900&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<style>
+:root{
+  --bg:#f0f3f8;--white:#fff;--ink:#0d1720;--ink2:#3d4f63;--ink3:#8a9eb5;
+  --border:#dde4ee;--teal:#0b7c6e;--teal2:#096054;--teal-l:#e2f4f2;
+  --blue:#1a58b0;--red:#c0392b;--amber:#b45309;--green:#15803d;
+  --shadow:0 2px 12px rgba(13,23,32,.08);--r:10px;
+  --dh-c:#1d4ed8;--dh-bg:#dbeafe;
+  --da-c:#15803d;--da-bg:#dcfce7;
+  --tc-c:#0e7490;--tc-bg:#cffafe;
+  --free-c:#b45309;--free-bg:#fef3c7;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Noto Sans JP',sans-serif;background:var(--bg);color:var(--ink);min-height:100vh;font-size:14px;}
+
+/* ── HEADER ── */
+header{background:var(--ink);height:52px;padding:0 20px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;}
+.hlogo{display:flex;align-items:center;gap:9px;}
+.hlogo-icon{width:28px;height:28px;background:var(--teal);border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:16px;}
+.hlogo-text{color:#fff;font-size:13px;font-weight:700;letter-spacing:.04em;}
+.hright{display:flex;align-items:center;gap:8px;}
+.sbadge{font-size:10px;padding:2px 9px;border-radius:20px;font-weight:700;}
+.sbadge.ok{background:var(--teal-l);color:var(--teal);}
+.sbadge.ng{background:#fee2e2;color:var(--red);}
+.sbadge.idle{background:rgba(255,255,255,.1);color:rgba(255,255,255,.4);}
+
+/* ── LAYOUT ── */
+.layout{display:grid;grid-template-columns:290px 1fr;min-height:calc(100vh - 52px);}
+
+/* ── SIDEBAR ── */
+.sb{background:var(--white);border-right:1px solid var(--border);padding:14px 12px;overflow-y:auto;display:flex;flex-direction:column;gap:12px;}
+.pnl{border:1px solid var(--border);border-radius:var(--r);overflow:hidden;}
+.ph{background:var(--ink);color:#fff;padding:8px 12px;font-size:10px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;display:flex;align-items:center;gap:5px;}
+.pb{padding:11px 12px;}
+
+/* date row */
+.drow{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
+.drow label{font-size:11px;font-weight:700;color:var(--ink2);}
+.dpick{padding:4px 7px;border:1.5px solid var(--border);border-radius:6px;font-size:11px;font-family:'DM Mono',monospace;outline:none;color:var(--ink);}
+.dpick:focus{border-color:var(--teal);}
+.bldbtn{padding:4px 10px;background:var(--blue);color:#fff;border:none;border-radius:6px;font-size:10px;font-weight:700;cursor:pointer;font-family:'Noto Sans JP',sans-serif;}
+.bldbtn:hover{background:#1449a0;}
+
+/* staff chips */
+.rgrp{margin-bottom:7px;}
+.rgrp-hd{display:flex;align-items:center;gap:4px;margin-bottom:4px;}
+.rtag{font-size:9px;font-weight:800;padding:2px 6px;border-radius:20px;color:#fff;}
+.rgrp-ct{font-size:10px;color:var(--ink3);}
+.chips{display:flex;flex-wrap:wrap;gap:3px;}
+.chip{
+  padding:3px 8px;border-radius:20px;font-size:11px;font-weight:600;
+  border:1.5px solid transparent;cursor:pointer;transition:all .12s;
+  user-select:none;
+}
+.chip.off{opacity:.3;text-decoration:line-through;}
+.off-tag{padding:2px 6px;border-radius:20px;font-size:10px;background:#fee2e2;color:var(--red);border:1px solid #fca5a5;font-weight:600;}
+.sep{height:1px;background:var(--border);margin:8px 0;}
+.hint{font-size:10px;color:var(--ink3);line-height:1.6;}
+
+/* add form */
+.af{display:flex;flex-direction:column;gap:5px;margin-top:9px;}
+.af input,.af select{width:100%;padding:6px 9px;border:1.5px solid var(--border);border-radius:6px;font-family:'Noto Sans JP',sans-serif;font-size:12px;color:var(--ink);background:#fff;outline:none;}
+.af input:focus,.af select:focus{border-color:var(--teal);}
+.af .abtn{padding:7px;background:var(--blue);color:#fff;border:none;border-radius:6px;font-family:'Noto Sans JP',sans-serif;font-size:11px;font-weight:700;cursor:pointer;}
+.af .abtn:hover{background:#1449a0;}
+
+/* upload */
+.dz{border:2px dashed var(--border);border-radius:8px;padding:18px 10px;text-align:center;cursor:pointer;transition:all .2s;background:var(--bg);position:relative;}
+.dz:hover,.dz.ov{border-color:var(--teal);background:var(--teal-l);}
+.dz input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%;}
+.dz-ico{font-size:24px;margin-bottom:4px;}
+.dz-lbl{font-size:11px;color:var(--ink2);font-weight:500;line-height:1.5;}
+.dz-hint{font-size:10px;color:var(--ink3);margin-top:2px;}
+.prev-img{width:100%;border-radius:6px;border:1px solid var(--border);margin-top:8px;display:none;max-height:150px;object-fit:cover;}
+.rbtn{width:100%;margin-top:8px;padding:9px;background:var(--teal);color:#fff;border:none;border-radius:7px;font-family:'Noto Sans JP',sans-serif;font-size:12px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:5px;transition:all .15s;}
+.rbtn:hover{background:var(--teal2);}
+.rbtn:disabled{background:var(--ink3);cursor:not-allowed;opacity:.65;}
+.ld{display:none;align-items:center;gap:7px;padding:10px;color:var(--teal);font-size:12px;font-weight:600;}
+.sp{width:16px;height:16px;border:2.5px solid var(--teal-l);border-top-color:var(--teal);border-radius:50%;animation:sp .7s linear infinite;}
+@keyframes sp{to{transform:rotate(360deg);}}
+
+/* ── MAIN ── */
+.main{padding:16px 18px;overflow-y:auto;}
+.topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:11px;flex-wrap:wrap;gap:7px;}
+.tl h2{font-size:15px;font-weight:700;}
+.tl span{font-size:11px;color:var(--ink3);}
+.tr{display:flex;gap:6px;flex-wrap:wrap;}
+.btn{padding:7px 13px;border-radius:7px;border:none;font-family:'Noto Sans JP',sans-serif;font-size:11px;font-weight:700;cursor:pointer;transition:all .15s;display:flex;align-items:center;gap:4px;}
+.btn:active{transform:scale(.97);}
+.btn-auto{background:linear-gradient(135deg,var(--teal),#12b5a0);color:#fff;box-shadow:0 3px 10px rgba(11,124,110,.28);}
+.btn-auto:hover{transform:translateY(-1px);}
+.btn-pdf{background:var(--ink);color:#fff;}
+.btn-pdf:hover{background:#1c2d3e;}
+.btn-ol{background:#fff;border:1.5px solid var(--border);color:var(--ink2);}
+.btn-ol:hover{border-color:var(--teal);color:var(--teal);}
+
+/* stats */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-bottom:11px;}
+.stat{background:#fff;border:1px solid var(--border);border-radius:var(--r);padding:9px 11px;box-shadow:var(--shadow);}
+.sl{font-size:9px;color:var(--ink3);margin-bottom:2px;text-transform:uppercase;letter-spacing:.04em;}
+.sv{font-size:20px;font-weight:900;font-family:'DM Mono',monospace;}
+
+/* workload pills */
+.wlbar{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:11px;}
+.wlp{display:flex;align-items:center;gap:3px;background:#fff;border:1px solid var(--border);border-radius:20px;padding:3px 7px;font-size:10px;font-weight:600;}
+.wld{width:6px;height:6px;border-radius:50%;}
+.wlct{background:var(--bg);border-radius:10px;padding:1px 5px;font-family:'DM Mono',monospace;font-size:10px;}
+/* highlight overloaded */
+.wlp.busy{border-color:var(--amber);background:#fef3c7;}
+
+/* ── CHAIR GRID ── */
+.cgrid{display:grid;gap:9px;}
+.ccard{background:#fff;border:1px solid var(--border);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden;}
+.chead{padding:7px 12px;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);background:var(--bg);}
+.cname{display:flex;align-items:center;gap:5px;}
+.cdot{width:8px;height:8px;border-radius:50%;}
+.cct{font-size:10px;color:var(--ink3);font-family:'DM Mono',monospace;}
+
+/* appt table header */
+.ahdr{display:grid;grid-template-columns:50px 1fr 86px 86px 86px;gap:4px;padding:5px 12px;background:#ecf0f7;border-bottom:1px solid var(--border);}
+.ahdr span{font-size:9px;font-weight:800;color:var(--ink3);letter-spacing:.04em;text-transform:uppercase;}
+.ahdr .hdh{color:var(--dh-c);}
+.ahdr .hda{color:var(--da-c);}
+.ahdr .htc{color:var(--tc-c);}
+
+/* appt row */
+.arow{display:grid;grid-template-columns:50px 1fr 86px 86px 86px;gap:4px;align-items:start;padding:7px 12px;border-bottom:1px solid var(--border);transition:background .12s;position:relative;}
+.arow:last-child{border-bottom:none;}
+.arow:hover{background:#f6f9fd;}
+.arow.free-flag{background:#fffbf0;}  /* "誰でも" rows get subtle highlight */
+.atm{font-family:'DM Mono',monospace;font-size:11px;color:var(--ink2);padding-top:2px;}
+.apinfo{}
+.apname{font-weight:600;font-size:12px;line-height:1.3;}
+.aptx{font-size:10px;color:var(--ink3);margin-top:1px;}
+.aptx.free-label{color:var(--amber);font-weight:700;}  /* visual for "誰でも" */
+.asel-wrap{display:flex;flex-direction:column;gap:3px;}
+
+/* assign select */
+.asel{
+  padding:4px 5px;border-radius:5px;border:1.5px solid var(--border);
+  font-family:'Noto Sans JP',sans-serif;font-size:11px;outline:none;
+  width:100%;cursor:pointer;background:#fff;transition:border-color .12s;
+  appearance:none;-webkit-appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%238a9eb5'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 6px center;padding-right:20px;
+}
+.asel:focus{border-color:var(--teal);}
+.asel.s-dh{border-color:var(--dh-c);background-color:var(--dh-bg);color:var(--dh-c);font-weight:700;}
+.asel.s-da{border-color:var(--da-c);background-color:var(--da-bg);color:var(--da-c);font-weight:700;}
+.asel.s-tc{border-color:var(--tc-c);background-color:var(--tc-bg);color:var(--tc-c);font-weight:700;}
+/* free slot assigned */
+.asel.s-free{border-color:var(--amber);background-color:var(--free-bg);color:var(--amber);font-weight:700;}
+
+/* availability badge under select */
+.avail-hint{font-size:9px;color:var(--ink3);padding-left:1px;line-height:1.4;}
+.avail-hint.none{color:var(--red);}
+
+/* empty */
+.emain{padding:56px 0;text-align:center;color:var(--ink3);background:#fff;border:1px solid var(--border);border-radius:var(--r);}
+.emain .ei{font-size:40px;margin-bottom:10px;opacity:.28;}
+.emain p{font-size:12px;line-height:2;}
+
+/* toast */
+.toast{position:fixed;bottom:20px;right:20px;background:var(--ink);color:#fff;padding:9px 16px;border-radius:9px;font-size:12px;font-weight:600;box-shadow:0 8px 28px rgba(13,23,32,.14);transform:translateY(60px);opacity:0;transition:all .26s cubic-bezier(.34,1.56,.64,1);z-index:300;max-width:280px;}
+.toast.on{transform:translateY(0);opacity:1;}
+.toast.ok{border-left:4px solid var(--teal);}
+.toast.ng{border-left:4px solid var(--red);}
+.toast.info{border-left:4px solid var(--blue);}
+
+/* free assignment legend */
+.legend{display:flex;align-items:center;gap:12px;font-size:10px;color:var(--ink3);margin-bottom:9px;flex-wrap:wrap;}
+.legend-item{display:flex;align-items:center;gap:4px;}
+.legend-dot{width:8px;height:8px;border-radius:2px;}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="hlogo">
+    <div class="hlogo-icon">🦷</div>
+    <div><div class="hlogo-text">チェア別スタッフ配置システム</div></div>
+  </div>
+  <div class="hright">
+    <span class="sbadge idle" id="sbadge">シフト未読込</span>
+    <span style="color:rgba(255,255,255,.35);font-size:10px;font-family:'DM Mono',monospace;" id="hdate"></span>
+  </div>
+</header>
+
+<div class="layout">
+<!-- ══ SIDEBAR ══ -->
+<aside class="sb">
+
+  <!-- Shift sync -->
+  <div class="pnl">
+    <div class="ph">📅 シフトアプリ連携</div>
+    <div class="pb">
+      <div class="drow">
+        <label>対象日</label>
+        <div style="display:flex;gap:4px;align-items:center;">
+          <input type="date" id="datePick" class="dpick">
+          <button class="bldbtn" onclick="loadShifts()">読込</button>
+        </div>
+      </div>
+      <div id="staffArea">
+        <p style="font-size:11px;color:var(--ink3);text-align:center;padding:10px 0;">「読込」を押すとシフトアプリから<br>当日出勤者を自動取得します</p>
+      </div>
+      <div class="sep"></div>
+      <p class="hint">チップをクリックで配置から除外できます<br>
+        <a href="https://dental-shift3.vercel.app/" target="_blank" style="color:var(--blue);">シフトアプリを開く ↗</a>
+      </p>
+    </div>
+  </div>
+
+  <!-- Manual add -->
+  <div class="pnl">
+    <div class="ph">➕ スタッフ手動追加</div>
+    <div class="pb">
+      <div class="af">
+        <input type="text" id="sName" placeholder="スタッフ名">
+        <select id="sRole">
+          <option value="Dh">歯科衛生士 (Dh)</option>
+          <option value="Da">歯科助手 (Da)</option>
+          <option value="TC">TC</option>
+        </select>
+        <button class="abtn" onclick="addManual()">＋ 追加</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Upload -->
+  <div class="pnl">
+    <div class="ph">📋 アポイント表を読み取る</div>
+    <div class="pb">
+      <label class="dz" id="dz">
+        <input type="file" id="imgIn" accept="image/*" onchange="onFile(event)">
+        <div class="dz-ico">📸</div>
+        <div class="dz-lbl">写真・スキャンをドロップ<br>またはクリックして選択</div>
+        <div class="dz-hint">JPG / PNG</div>
+      </label>
+      <img id="prevImg" class="prev-img" alt="">
+      <button class="rbtn" id="rdBtn" onclick="readImg()" disabled>✨ AIで読み取る</button>
+      <div class="ld" id="ld"><div class="sp"></div>AIが解析中…</div>
+    </div>
+  </div>
+
+</aside>
+
+<!-- ══ MAIN ══ -->
+<main class="main">
+  <div class="topbar">
+    <div class="tl">
+      <h2 id="mainTitle">チェア別スタッフ配置</h2>
+      <span id="subTtl">左パネルから操作してください</span>
+    </div>
+    <div class="tr">
+      <button class="btn btn-auto" onclick="autoAssign()">⚡ 自動振り分け</button>
+      <button class="btn btn-pdf" onclick="exportPDF()">🖨 PDF出力</button>
+      <button class="btn btn-ol" onclick="clearAll()">🗑 リセット</button>
+    </div>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="sl">総予約数</div><div class="sv" id="s0" style="color:var(--blue)">0</div></div>
+    <div class="stat"><div class="sl">配置済み</div><div class="sv" id="s1" style="color:var(--teal)">0</div></div>
+    <div class="stat"><div class="sl">未配置</div><div class="sv" id="s2" style="color:var(--red)">0</div></div>
+    <div class="stat"><div class="sl">出勤人数</div><div class="sv" id="s3" style="color:var(--ink)">0</div></div>
+  </div>
+
+  <div class="legend">
+    <span style="font-weight:700;color:var(--ink2);">凡例：</span>
+    <span class="legend-item"><span class="legend-dot" style="background:var(--dh-bg);border:1px solid var(--dh-c);"></span>歯科衛生士</span>
+    <span class="legend-item"><span class="legend-dot" style="background:var(--da-bg);border:1px solid var(--da-c);"></span>歯科助手</span>
+    <span class="legend-item"><span class="legend-dot" style="background:var(--tc-bg);border:1px solid var(--tc-c);"></span>TC</span>
+    <span class="legend-item"><span class="legend-dot" style="background:var(--free-bg);border:1px solid var(--amber);"></span>「誰でも」枠（空き優先）</span>
+  </div>
+
+  <div class="wlbar" id="wlbar"></div>
+  <div id="cgrid" class="cgrid"></div>
+
+  <div class="emain" id="emain">
+    <div class="ei">📅</div>
+    <p>① シフト連携で当日出勤者を取得<br>② アポイント表の画像をアップロード<br>③「⚡ 自動振り分け」で配置完了</p>
+  </div>
+</main>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+// ══════════════════════════════════════════════
+// CONFIG
+// ══════════════════════════════════════════════
+const SB_URL = "https://gvxdmldpimjvicllrhll.supabase.co";
+const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd2eGRtbGRwaW1qdmljbGxyaGxsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0MTE2OTUsImV4cCI6MjA4Nzk4NzY5NX0.6EnrECgVy79VUNsbRQGL_shmhaWnPAq0BL2uYz6ilF0";
+
+const WORKING = new Set(['出勤','訪問','AM_MT','土曜出勤','第2土曜出勤','矯正当番_土','矯正当番_木','午前半休','午後半休']);
+const ASSIGN_ROLES = new Set(['Dh','Da','TC']);
+
+const RC = {
+  Dh:{ label:'歯科衛生士', short:'DH', color:'#1d4ed8', bg:'#dbeafe' },
+  Da:{ label:'歯科助手',   short:'DA', color:'#15803d', bg:'#dcfce7' },
+  TC:{ label:'TC',         short:'TC', color:'#0e7490', bg:'#cffafe' },
+};
+const CHAIR_COLORS = ['#3b7dd8','#0b7c6e','#c45c15','#6e34a8','#b91c1c','#1e7e4e','#7c6400','#1a6e8a','#7c3a8a'];
+
+// Keywords that mean "anyone is fine"
+const FREE_KEYWORDS = ['誰でも','だれでも','フリー','自由','空き','どなたでも','衛生士誰でも','誰でもok','誰でもOK'];
+
+// ══════════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════════
+let schedule = { date:'', chairs:[] };
+// staff: {id, name, role:'Dh'|'Da'|'TC', active:bool, source:'shift'|'manual'}
+let staff = [];
+let manualId = 9000;
+let imgB64 = null, imgMime = null;
+
+// ══════════════════════════════════════════════
+// INIT
+// ══════════════════════════════════════════════
+window.onload = () => {
+  const today = new Date().toISOString().slice(0,10);
+  document.getElementById('datePick').value = today;
+  document.getElementById('hdate').textContent = fmtJP(today);
+  renderAll();
+};
+
+function fmtJP(iso) {
+  if (!iso) return '';
+  return new Date(iso+'T00:00:00').toLocaleDateString('ja-JP',{year:'numeric',month:'long',day:'numeric',weekday:'short'});
+}
+
+// ══════════════════════════════════════════════
+// FREE-SLOT DETECTION
+// ══════════════════════════════════════════════
+function isFreeSlot(appt) {
+  const tx = (appt.treatment||'').toLowerCase();
+  return FREE_KEYWORDS.some(k => (appt.treatment||'').includes(k))
+    || tx.includes('誰でも') || tx.includes('フリー');
+}
+
+// timeStr "09:30" → minutes since midnight
+function toMin(t) {
+  if (!t) return 0;
+  const [h,m] = t.split(':').map(Number);
+  return h*60 + (m||0);
+}
+
+// Check if staffId is busy during [startMin, startMin+duration)
+function isBusy(staffId, startMin, duration, excludeApptId) {
+  const endMin = startMin + (duration||30);
+  for (const ch of schedule.chairs) {
+    for (const a of ch.appointments) {
+      if (a.id === excludeApptId) continue;
+      const aStart = toMin(a.time);
+      const aEnd = aStart + (a.duration||30);
+      // overlap check
+      if (aStart < endMin && aEnd > startMin) {
+        if (a.assignDh === staffId || a.assignDa === staffId || a.assignTC === staffId) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+// Get available staff of role at a given time slot
+function getAvailable(role, startMin, duration, excludeApptId) {
+  return staff.filter(s => s.active && s.role === role)
+    .filter(s => !isBusy(s.id, startMin, duration, excludeApptId));
+}
+
+// ══════════════════════════════════════════════
+// SUPABASE
+// ══════════════════════════════════════════════
+async function sbGet(key) {
+  const res = await fetch(`${SB_URL}/rest/v1/app_data?key=eq.${key}&select=value`,{
+    headers:{ apikey:SB_KEY, Authorization:`Bearer ${SB_KEY}` }
+  });
+  const rows = await res.json();
+  if (!rows||!rows[0]) return null;
+  return JSON.parse(rows[0].value);
+}
+
+async function loadShifts() {
+  const date = document.getElementById('datePick').value;
+  if (!date) { toast('日付を選択してください','ng'); return; }
+  const el = document.getElementById('sbadge');
+  el.textContent='読込中…'; el.className='sbadge idle';
+  toast('シフトアプリからデータ取得中…','info');
+
+  try {
+    const [allStaff, allShifts] = await Promise.all([sbGet('ds_staff'), sbGet('ds_shifts')]);
+    if (!allStaff || !allShifts) throw new Error('no data');
+
+    const d = new Date(date+'T00:00:00');
+    const day = d.getDate(), yr = d.getFullYear(), mo = d.getMonth();
+
+    const getShift = s => allShifts[`${s.id}_${yr}_${mo}_${day}`] || allShifts[`${s.id}_${day}`];
+
+    const working = allStaff.filter(s => s.active && ASSIGN_ROLES.has(s.role) && WORKING.has(getShift(s)));
+    const offList = allStaff.filter(s => s.active && ASSIGN_ROLES.has(s.role) && ['休み','有給'].includes(getShift(s)));
+
+    // Merge: keep manual, replace shift entries
+    staff = staff.filter(s => s.source === 'manual');
+    working.forEach(s => staff.push({ id:s.id, name:s.name, role:s.role, active:true, source:'shift' }));
+
+    document.getElementById('hdate').textContent = fmtJP(date);
+    el.textContent = `出勤 ${working.length}名`; el.className = 'sbadge ok';
+
+    renderStaffPanel(working, offList);
+    renderAll();
+    toast(`${working.length}名の出勤スタッフを取得しました ✓`,'ok');
+  } catch(e) {
+    console.error(e);
+    el.textContent = '取得失敗'; el.className = 'sbadge ng';
+    toast('シフトデータの取得に失敗しました','ng');
+  }
+}
+
+function renderStaffPanel(working, offList) {
+  const area = document.getElementById('staffArea');
+  const byRole = {};
+  working.forEach(s => { if(!byRole[s.role]) byRole[s.role]=[]; byRole[s.role].push(s); });
+
+  let html = '';
+  ['Dh','Da','TC'].forEach(role => {
+    const mem = byRole[role]||[];
+    if (!mem.length) return;
+    const cfg = RC[role];
+    html += `<div class="rgrp">
+      <div class="rgrp-hd">
+        <span class="rtag" style="background:${cfg.color}">${cfg.short}</span>
+        <span class="rgrp-ct">${cfg.label} ${mem.length}名</span>
+      </div>
+      <div class="chips">
+        ${mem.map(s => {
+          const st = staff.find(x=>x.id===s.id);
+          const off = st && !st.active;
+          return `<span class="chip${off?' off':''}"
+            style="background:${off?'#f3f4f6':cfg.bg};color:${off?'#9ca3af':cfg.color};border-color:${off?'#e5e7eb':cfg.color}50;"
+            onclick="toggleStaff(${s.id})" title="${off?'クリックで復帰':'クリックで除外'}">${off?'✕ ':''}${s.name}</span>`;
+        }).join('')}
+      </div>
+    </div>`;
+  });
+
+  if (offList.length) {
+    html += `<div style="margin-top:5px;"><span style="font-size:10px;color:var(--ink3);font-weight:700;">本日休み：</span>
+      ${offList.map(s=>`<span class="off-tag">${s.name}</span>`).join(' ')}</div>`;
+  }
+
+  area.innerHTML = html || '<p style="font-size:11px;color:var(--ink3);padding:8px 0;text-align:center;">出勤スタッフなし</p>';
+}
+
+function toggleStaff(id) {
+  const s = staff.find(x=>x.id===id);
+  if (!s) return;
+  s.active = !s.active;
+  // Update chip UI
+  document.querySelectorAll('.chip').forEach(el => {
+    const onclick = el.getAttribute('onclick')||'';
+    const sid = parseInt(onclick.match(/\d+/)?.[0]||'0');
+    if (sid === id) {
+      const cfg = RC[s.role]||{};
+      el.className = `chip${s.active?'':' off'}`;
+      el.style.background = s.active ? cfg.bg : '#f3f4f6';
+      el.style.color = s.active ? cfg.color : '#9ca3af';
+      el.style.borderColor = s.active ? cfg.color+'50' : '#e5e7eb';
+      el.textContent = (s.active?'':'✕ ') + s.name;
+    }
+  });
+  renderAll();
+}
+
+// ══════════════════════════════════════════════
+// MANUAL STAFF
+// ══════════════════════════════════════════════
+function addManual() {
+  const name = document.getElementById('sName').value.trim();
+  const role = document.getElementById('sRole').value;
+  if (!name) { toast('名前を入力してください','ng'); return; }
+  if (staff.find(s=>s.name===name&&s.role===role)) { toast('すでに登録されています','ng'); return; }
+  staff.push({ id:manualId++, name, role, active:true, source:'manual' });
+  document.getElementById('sName').value = '';
+  renderAll();
+  toast(`${name} を追加しました`,'ok');
+}
+
+// ══════════════════════════════════════════════
+// FILE / AI READ
+// ══════════════════════════════════════════════
+function onFile(e) {
+  const f = e.target.files[0]; if(!f) return;
+  const r = new FileReader();
+  r.onload = ev => {
+    imgB64 = ev.target.result.split(',')[1];
+    imgMime = f.type||'image/jpeg';
+    const p = document.getElementById('prevImg');
+    p.src = ev.target.result; p.style.display='block';
+    document.getElementById('rdBtn').disabled = false;
+    toast('画像を選択しました','info');
+  };
+  r.readAsDataURL(f);
+}
+const dzEl = document.getElementById('dz');
+dzEl.addEventListener('dragover',e=>{e.preventDefault();dzEl.classList.add('ov');});
+dzEl.addEventListener('dragleave',()=>dzEl.classList.remove('ov'));
+dzEl.addEventListener('drop',e=>{
+  e.preventDefault();dzEl.classList.remove('ov');
+  const f=e.dataTransfer.files[0];
+  if(f){const i=document.getElementById('imgIn');const dt=new DataTransfer();dt.items.add(f);i.files=dt.files;onFile({target:i});}
+});
+
+async function readImg() {
+  if(!imgB64) return;
+  document.getElementById('rdBtn').disabled=true;
+  document.getElementById('ld').style.display='flex';
+
+  const prompt=`これは歯科医院のチェア別予約一覧表（アポイント表）です。
+全ての予約情報を読み取り、以下のJSON形式のみで返してください。コードブロック不要。
+
+{
+  "date": "日付文字列（元号表記でOK）",
+  "chairs": [
+    {
+      "name": "チェア名（メンテ1、Dr.5、特診室など）",
+      "appointments": [
+        {
+          "time": "HH:MM",
+          "patient": "患者名",
+          "treatment": "処置内容。担当欄に「衛生士誰でも」「誰でも」と書いてあればそのまま含める",
+          "duration": 所要時間分（コマ数×15、不明なら30）,
+          "is_free_slot": true/falseで「誰でも」「衛生士誰でも」等の場合はtrue,
+          "existing_staff": "担当者名が手書きで書いてあれば名前（なければ空文字）"
+        }
+      ]
+    }
+  ]
+}
+注意:チェア列ごと。空コマ除外。時間は左端時間軸参照。「誰でも」はis_free_slotをtrueに。`;
+
+  try {
+    const res = await fetch('/api/read-appt',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        model:'claude-sonnet-4-20250514', max_tokens:2500,
+        messages:[{role:'user',content:[
+          {type:'image',source:{type:'base64',media_type:imgMime,data:imgB64}},
+          {type:'text',text:prompt}
+        ]}]
+      })
+    });
+    const data = await res.json();
+    const text = (data.content||[]).map(c=>c.text||'').join('');
+    const parsed = JSON.parse(text.replace(/```json|```/g,'').trim());
+
+    parsed.chairs = (parsed.chairs||[]).map((ch,i)=>({
+      ...ch,
+      color: CHAIR_COLORS[i%CHAIR_COLORS.length],
+      appointments: (ch.appointments||[]).map(a=>({
+        ...a,
+        id: Math.random().toString(36).slice(2,9),
+        isFree: a.is_free_slot || isFreeSlot(a),
+        assignDh: matchStaff(a.existing_staff,'Dh'),
+        assignDa: matchStaff(a.existing_staff,'Da'),
+        assignTC: matchStaff(a.existing_staff,'TC'),
+      }))
+    }));
+
+    schedule = parsed;
+    if(parsed.date) document.getElementById('subTtl').textContent = parsed.date;
+    renderAll();
+    const tot = parsed.chairs.reduce((s,c)=>s+c.appointments.length,0);
+    const freeCount = parsed.chairs.reduce((s,c)=>s+c.appointments.filter(a=>a.isFree).length,0);
+    toast(`${parsed.chairs.length}チェア・${tot}件読取 (うち「誰でも」${freeCount}件) ✓`,'ok');
+  } catch(e) {
+    console.error(e);
+    toast('読み取りに失敗しました','ng');
+  } finally {
+    document.getElementById('rdBtn').disabled=false;
+    document.getElementById('ld').style.display='none';
+  }
+}
+
+function matchStaff(name, role) {
+  if(!name) return '';
+  const s = staff.filter(x=>x.active&&x.role===role).find(x=>name.includes(x.name.split(/\s/)[0])||x.name.includes(name));
+  return s ? s.id : '';
+}
+
+// ══════════════════════════════════════════════
+// AUTO ASSIGN (availability-aware)
+// ══════════════════════════════════════════════
+function autoAssign() {
+  if (!schedule.chairs?.length) { toast('予約データがありません','ng'); return; }
+  if (!staff.filter(s=>s.active).length) { toast('出勤スタッフを先に読み込んでください','ng'); return; }
+
+  // Sort appointments by time globally for proper load balancing
+  const allAppts = [];
+  schedule.chairs.forEach(ch => ch.appointments.forEach(a => allAppts.push({...a, _ch:ch})));
+  allAppts.sort((a,b)=>toMin(a.time)-toMin(b.time));
+
+  // Track assignment load {staffId: minutes}
+  const load = {};
+  staff.filter(s=>s.active).forEach(s=>load[s.id]=0);
+
+  allAppts.forEach(a => {
+    const startMin = toMin(a.time);
+    const dur = a.duration||30;
+    const apptRef = a._ch.appointments.find(x=>x.id===a.id);
+    if (!apptRef) return;
+
+    if (apptRef.isFree) {
+      // 「誰でも」 → find DH with most availability (least load + not busy)
+      const avail = getAvailable('Dh', startMin, dur, a.id);
+      if (avail.length) {
+        avail.sort((x,y)=>(load[x.id]||0)-(load[y.id]||0));
+        apptRef.assignDh = avail[0].id;
+        load[avail[0].id] = (load[avail[0].id]||0) + dur;
+      }
+      // For free slots, DA and TC are typically not needed unless available
+      // Keep empty unless you want to change this logic
+    } else {
+      // Normal assignment
+      [['Dh','assignDh'],['Da','assignDa'],['TC','assignTC']].forEach(([role,field])=>{
+        if (apptRef[field]) { load[apptRef[field]]=(load[apptRef[field]]||0)+dur; return; }
+        const avail = getAvailable(role, startMin, dur, a.id);
+        if (!avail.length) return;
+        avail.sort((x,y)=>(load[x.id]||0)-(load[y.id]||0));
+        apptRef[field] = avail[0].id;
+        load[avail[0].id] = (load[avail[0].id]||0) + dur;
+      });
+    }
+  });
+
+  renderAll();
+  const freeAssigned = allAppts.filter(a=>{
+    const ref = a._ch.appointments.find(x=>x.id===a.id);
+    return ref?.isFree && ref?.assignDh;
+  }).length;
+  toast(`自動振り分け完了 ✓（「誰でも」枠 ${freeAssigned}件を空きスタッフへ配置）`,'ok');
+}
+
+// ══════════════════════════════════════════════
+// RENDER
+// ══════════════════════════════════════════════
+function renderAll() {
+  renderWL();
+  renderChairs();
+  updateStats();
+}
+
+function renderWL() {
+  const bar = document.getElementById('wlbar');
+  const load = {};
+  staff.filter(s=>s.active).forEach(s=>load[s.id]=0);
+  schedule.chairs?.forEach(ch=>ch.appointments?.forEach(a=>{
+    [a.assignDh,a.assignDa,a.assignTC].forEach(id=>{
+      if(id) load[id]=(load[id]||0)+(a.duration||30);
+    });
+  }));
+  const maxLoad = Math.max(...Object.values(load), 1);
+  bar.innerHTML = staff.filter(s=>s.active).map(s=>{
+    const cfg = RC[s.role]||{};
+    const mins = load[s.id]||0;
+    const h=Math.floor(mins/60), m=mins%60;
+    const dur = mins>0?(h>0?`${h}h${m>0?m+'m':''}`:`${m}m`):'0m';
+    const busy = mins > 240; // >4h flagged
+    return `<div class="wlp${busy?' busy':''}">
+      <div class="wld" style="background:${cfg.color}"></div>
+      <span>${s.name}</span>
+      <span class="wlct">${dur}</span>
+    </div>`;
+  }).join('');
+}
+
+function renderChairs() {
+  const grid = document.getElementById('cgrid');
+  const em = document.getElementById('emain');
+  const chairs = schedule.chairs||[];
+  if (!chairs.length) { grid.innerHTML=''; em.style.display='block'; return; }
+  em.style.display='none';
+  grid.style.gridTemplateColumns = `repeat(${Math.min(chairs.length,3)},1fr)`;
+
+  grid.innerHTML = chairs.map(ch => {
+    const appts = ch.appointments||[];
+    const rows = appts.length===0
+      ? `<div style="padding:14px;text-align:center;color:var(--ink3);font-size:11px;">予約なし</div>`
+      : `<div class="ahdr"><span>時間</span><span>患者</span><span class="hdh">DH衛生士</span><span class="hda">DA助手</span><span class="htc">TC</span></div>`
+        + appts.map(a => renderRow(a)).join('');
+    return `<div class="ccard">
+      <div class="chead">
+        <div class="cname"><div class="cdot" style="background:${ch.color}"></div><span>${ch.name}</span></div>
+        <span class="cct">${appts.length}件</span>
+      </div>${rows}
+    </div>`;
+  }).join('');
+}
+
+function renderRow(a) {
+  const free = a.isFree;
+  const startMin = toMin(a.time);
+  const dur = a.duration||30;
+
+  const mkSel = (role, field, selClass) => {
+    const cands = staff.filter(s=>s.active&&s.role===role);
+    const val = a[field];
+    const setCls = val ? (free && field==='assignDh' ? 's-free' : selClass) : '';
+
+    // Availability hints
+    const availNow = getAvailable(role, startMin, dur, a.id);
+    const busyNow = staff.filter(s=>s.active&&s.role===role).filter(s=>isBusy(s.id,startMin,dur,a.id));
+    let hint = '';
+    if (cands.length === 0) hint = `<div class="avail-hint none">担当なし</div>`;
+    else if (availNow.length === 0) hint = `<div class="avail-hint none">⚠ 全員対応中</div>`;
+    else hint = `<div class="avail-hint">空き${availNow.length}名</div>`;
+
+    return `<div class="asel-wrap">
+      <select class="asel ${setCls}" onchange="setAssign('${a.id}','${field}',this.value,'${selClass}',this,'${free&&field==="assignDh"?'s-free':''}')">
+        <option value="">— 未配置</option>
+        ${cands.map(s=>{
+          const busy = isBusy(s.id,startMin,dur,a.id)&&s.id!==val;
+          return `<option value="${s.id}" ${val==s.id?'selected':''} ${busy?'style="color:#9ca3af"':''}>
+            ${s.name}${busy?' (対応中)':''}
+          </option>`;
+        }).join('')}
+      </select>
+      ${hint}
+    </div>`;
+  };
+
+  return `<div class="arow${free?' free-flag':''}">
+    <span class="atm">${a.time||''}</span>
+    <div class="apinfo">
+      <div class="apname">${a.patient||'—'}</div>
+      <div class="aptx${free?' free-label':''}">${free?'🔄 '+a.treatment:a.treatment||''}</div>
+    </div>
+    ${mkSel('Dh','assignDh','s-dh')}
+    ${mkSel('Da','assignDa','s-da')}
+    ${mkSel('TC','assignTC','s-tc')}
+  </div>`;
+}
+
+function setAssign(apptId, field, val, normalCls, el, freeCls) {
+  let found = false;
+  schedule.chairs?.forEach(ch=>{
+    const a = ch.appointments?.find(x=>x.id===apptId);
+    if (a) {
+      a[field] = val ? parseInt(val) : '';
+      found = true;
+      const cls = val ? (a.isFree && field==='assignDh' ? freeCls : normalCls) : '';
+      el.className = `asel ${cls}`;
+    }
+  });
+  if (found) { updateStats(); renderWL(); }
+  // Re-render availability hints for all rows in same time slot
+  rerenderHints(apptId);
+}
+
+function rerenderHints(changedId) {
+  // Find the time of changed appt, re-render rows in same time block
+  let changedTime = null;
+  schedule.chairs?.forEach(ch=>ch.appointments?.forEach(a=>{
+    if(a.id===changedId) changedTime=a.time;
+  }));
+  if(!changedTime) return;
+  // Simple: just re-render all chairs
+  renderChairs();
+  updateStats();
+}
+
+function updateStats() {
+  const chairs = schedule.chairs||[];
+  const tot = chairs.reduce((s,c)=>s+(c.appointments?.length||0),0);
+  const asgn = chairs.reduce((s,c)=>s+(c.appointments?.filter(a=>a.assignDh||a.assignDa||a.assignTC).length||0),0);
+  document.getElementById('s0').textContent=tot;
+  document.getElementById('s1').textContent=asgn;
+  document.getElementById('s2').textContent=tot-asgn;
+  document.getElementById('s3').textContent=staff.filter(s=>s.active).length;
+}
+
+function clearAll() {
+  if(!confirm('予約データをリセットしますか？')) return;
+  schedule={date:'',chairs:[]};
+  renderAll();
+}
+
+// ══════════════════════════════════════════════
+// PDF EXPORT
+// ══════════════════════════════════════════════
+async function exportPDF() {
+  const chairs = schedule.chairs||[];
+  if(!chairs.length){ toast('予約データがありません','ng'); return; }
+  const {jsPDF}=window.jspdf;
+  const doc=new jsPDF({orientation:'landscape',unit:'mm',format:'a4'});
+  const pw=297,ph=210,mg=12;
+  const gN=id=>{if(!id)return'—';const s=staff.find(x=>x.id==id);return s?s.name:'—';};
+
+  // Header
+  doc.setFillColor(13,23,32); doc.rect(0,0,pw,15,'F');
+  doc.setTextColor(255,255,255); doc.setFont('helvetica','bold'); doc.setFontSize(13);
+  doc.text('Chair Schedule — Staff Assignment',mg,10);
+  doc.setFont('helvetica','normal'); doc.setFontSize(8);
+  doc.text(schedule.date||document.getElementById('datePick').value,pw-mg,10,{align:'right'});
+
+  // Working staff list
+  const wStaff = staff.filter(s=>s.active);
+  doc.setFontSize(7.5); doc.setTextColor(180,195,210);
+  doc.text('出勤: '+wStaff.map(s=>s.name).join('・'),mg,14);
+
+  let y=20;
+  const cols=[mg,mg+20,mg+58,mg+96,mg+120,mg+144];
+  const hdrs=['時間','患者名','処置内容','DH 衛生士','DA 助手','TC'];
+
+  chairs.forEach(ch=>{
+    const appts=ch.appointments||[];
+    if(!appts.length) return;
+    if(y+14+appts.length*8>ph-12){doc.addPage();y=16;}
+    const rgb=hexRgb(ch.color)||{r:30,g:45,b:64};
+    doc.setFillColor(rgb.r,rgb.g,rgb.b); doc.rect(0,y-4,pw,9,'F');
+    doc.setTextColor(255,255,255); doc.setFont('helvetica','bold'); doc.setFontSize(10);
+    doc.text(ch.name,mg,y+2);
+    doc.setFontSize(7.5);
+    doc.text(`${appts.length}件`,pw-mg,y+2,{align:'right'});
+    y+=10;
+    doc.setFillColor(228,234,245); doc.rect(0,y-4,pw,7,'F');
+    doc.setTextColor(70,90,120); doc.setFont('helvetica','bold'); doc.setFontSize(7);
+    hdrs.forEach((h,i)=>doc.text(h,cols[i],y));
+    y+=8;
+    appts.forEach((a,i)=>{
+      if(y>ph-12){doc.addPage();y=16;}
+      if(i%2===0){doc.setFillColor(a.isFree?255:247,a.isFree?251:250,a.isFree?230:254); doc.rect(0,y-5,pw,8,'F');}
+      doc.setTextColor(20,40,60); doc.setFont('helvetica','normal'); doc.setFontSize(8.5);
+      const tx=(a.isFree?'★ ':'')+((a.treatment||'').slice(0,14));
+      [a.time||'', (a.patient||'').slice(0,12),tx,gN(a.assignDh),gN(a.assignDa),gN(a.assignTC)].forEach((v,i)=>
+        doc.text(String(v),cols[i],y)
+      );
+      doc.setDrawColor(218,226,240); doc.line(0,y+2,pw,y+2);
+      y+=8;
+    });
+    y+=5;
+  });
+
+  // Footer
+  doc.setFillColor(13,23,32); doc.rect(0,ph-9,pw,9,'F');
+  doc.setTextColor(140,160,180); doc.setFont('helvetica','normal'); doc.setFontSize(6.5);
+  const tot=chairs.reduce((s,c)=>s+(c.appointments?.length||0),0);
+  const freeC=chairs.reduce((s,c)=>s+(c.appointments?.filter(a=>a.isFree).length||0),0);
+  doc.text('歯科クリニック スタッフ配置システム',mg,ph-4);
+  doc.text(`計${tot}件 / うち「誰でも」${freeC}件 / 出勤${wStaff.length}名`,pw-mg,ph-4,{align:'right'});
+  doc.save('chair-schedule.pdf');
+  toast('PDFを出力しました ✓','ok');
+}
+
+function hexRgb(h){
+  const m=(h||'').replace('#','').match(/.{2}/g);
+  return m?{r:parseInt(m[0],16),g:parseInt(m[1],16),b:parseInt(m[2],16)}:null;
+}
+
+function toast(msg,type='info'){
+  const el=document.getElementById('toast');
+  el.textContent=msg; el.className=`toast ${type} on`;
+  clearTimeout(el._t); el._t=setTimeout(()=>el.classList.remove('on'),3800);
+}
+</script>
+</body>
+</html>

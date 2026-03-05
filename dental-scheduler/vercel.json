@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/read-appt.js": {
+      "maxDuration": 30
+    }
+  }
+}
