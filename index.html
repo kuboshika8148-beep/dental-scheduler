@@ -582,7 +582,7 @@ dzEl.addEventListener('drop',e=>{
 });
 
 async function readImg() {
-  if(!imgB64) return;
+  if(!imgB64 && !pdfText) return;
   document.getElementById('rdBtn').disabled=true;
   document.getElementById('ld').style.display='flex';
 
