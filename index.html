@@ -783,16 +783,8 @@ function autoAssign() {
         apptRef.assignDa = '';
       }
 
-      // TC配置
-      if (!apptRef.assignTC) {
-        const avail = getAvailableWithBreak('TC', startMin, dur, a.id);
-        if (avail.length) {
-          avail.sort((x,y)=>(load[x.id]||0)-(load[y.id]||0));
-          const s = avail[0];
-          apptRef.assignTC = s.id;
-          load[s.id] = (load[s.id]||0) + dur;
-        }
-      } else {
+      // TC: 自動配置しない（手動のみ）
+      if (apptRef.assignTC) {
         load[apptRef.assignTC] = (load[apptRef.assignTC]||0) + dur;
       }
     }
@@ -855,10 +847,10 @@ function renderChairs() {
     const isDr = isDrChair(ch.name);
     const rows = appts.length===0
       ? `<div style="padding:14px;text-align:center;color:var(--ink3);font-size:11px;">予約なし</div>`
-      : `<div class="ahdr" style="grid-template-columns:50px 1fr 86px ${isDr?'86px ':''} 86px;">
+      : `<div class="ahdr" style="grid-template-columns:50px 1fr 86px ${isDr?'86px ':''} 86px 86px;">
           <span>時間</span><span>患者</span><span class="hdh">DH衛生士</span>
           ${isDr?'<span class="hda">DA助手</span>':''}
-          <span class="htc">TC</span>
+          <span class="htc" style="font-size:9px;">TC<span style="font-weight:400;color:#aaa;">（任意）</span></span>
         </div>`
         + appts.map(a => renderRow(a, isDr)).join('');
     return `<div class="ccard">
@@ -902,7 +894,7 @@ function renderRow(a, showDA=true) {
     </div>`;
   };
 
-  return `<div class="arow${free?' free-flag':''}" style="grid-template-columns:50px 1fr 86px ${showDA?'86px ':''}86px;">
+  return `<div class="arow${free?' free-flag':''}" style="grid-template-columns:50px 1fr 86px ${showDA?'86px ':''}86px 86px;">
     <span class="atm">${a.time||''}</span>
     <div class="apinfo">
       <div class="apname">${a.patient||'—'}</div>
