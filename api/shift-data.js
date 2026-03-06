@@ -17,7 +17,11 @@ export default async function handler(req, res) {
     );
     const rows = await response.json();
     if (!rows || !rows[0]) return res.status(404).json({ error: 'not found' });
-    return res.status(200).json(JSON.parse(rows[0].value));
+    
+    // valueが文字列の場合とオブジェクトの場合の両方に対応
+    const value = rows[0].value;
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+    return res.status(200).json(parsed);
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
