@@ -381,12 +381,9 @@ function getAvailable(role, startMin, duration, excludeApptId) {
 // SUPABASE
 // ══════════════════════════════════════════════
 async function sbGet(key) {
-  const res = await fetch(`${SB_URL}/rest/v1/app_data?key=eq.${key}&select=value`,{
-    headers:{ apikey:SB_KEY, Authorization:`Bearer ${SB_KEY}` }
-  });
-  const rows = await res.json();
-  if (!rows||!rows[0]) return null;
-  return JSON.parse(rows[0].value);
+  const res = await fetch(`/api/shift-data?key=${key}`);
+  if (!res.ok) return null;
+  return await res.json();
 }
 
 async function loadShifts() {
