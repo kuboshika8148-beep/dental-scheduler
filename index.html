@@ -239,12 +239,13 @@ header{background:var(--ink);height:52px;padding:0 20px;display:flex;align-items
     <div class="ph">📋 アポイント表を読み取る</div>
     <div class="pb">
       <label class="dz" id="dz">
-        <input type="file" id="imgIn" accept="image/*" onchange="onFile(event)">
-        <div class="dz-ico">📸</div>
-        <div class="dz-lbl">写真・スキャンをドロップ<br>またはクリックして選択</div>
-        <div class="dz-hint">JPG / PNG</div>
+        <input type="file" id="imgIn" accept="image/*,application/pdf" onchange="onFile(event)">
+        <div class="dz-ico">📄</div>
+        <div class="dz-lbl">アポイント表をドロップ<br>またはクリックして選択</div>
+        <div class="dz-hint">JPG / PNG / PDF</div>
       </label>
       <img id="prevImg" class="prev-img" alt="">
+      <div id="pdfName" style="display:none;margin-top:8px;padding:8px 10px;background:#f0f3f8;border-radius:6px;font-size:12px;color:#3d4f63;font-weight:600;"></div>
       <button class="rbtn" id="rdBtn" onclick="readImg()" disabled>✨ AIで読み取る</button>
       <div class="ld" id="ld"><div class="sp"></div>AIが解析中…</div>
     </div>
@@ -499,11 +500,18 @@ function onFile(e) {
   const r = new FileReader();
   r.onload = ev => {
     imgB64 = ev.target.result.split(',')[1];
-    imgMime = f.type||'image/jpeg';
+    imgMime = f.type || 'image/jpeg';
     const p = document.getElementById('prevImg');
-    p.src = ev.target.result; p.style.display='block';
+    if (f.type === 'application/pdf') {
+      p.style.display = 'none';
+      document.getElementById('pdfName').textContent = '📄 ' + f.name;
+      document.getElementById('pdfName').style.display = 'block';
+    } else {
+      p.src = ev.target.result; p.style.display = 'block';
+      document.getElementById('pdfName').style.display = 'none';
+    }
     document.getElementById('rdBtn').disabled = false;
-    toast('画像を選択しました','info');
+    toast(f.type === 'application/pdf' ? 'PDFを選択しました' : '画像を選択しました', 'info');
   };
   r.readAsDataURL(f);
 }
@@ -550,7 +558,9 @@ async function readImg() {
       body:JSON.stringify({
         model:'claude-sonnet-4-20250514', max_tokens:2500,
         messages:[{role:'user',content:[
-          {type:'image',source:{type:'base64',media_type:imgMime,data:imgB64}},
+          imgMime === 'application/pdf'
+            ? {type:'document',source:{type:'base64',media_type:'application/pdf',data:imgB64}}
+            : {type:'image',source:{type:'base64',media_type:imgMime,data:imgB64}},
           {type:'text',text:prompt}
         ]}]
       })
