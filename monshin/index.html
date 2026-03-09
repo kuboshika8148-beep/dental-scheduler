@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>サブカルテ v0.4</title>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState, useCallback, useMemo, useEffect, useRef } = React;
+
+/* ═══════════════════════════════════════════════════════════════════════
+   🦷 サブカルテ v0.4 — 手書きキャンバス（Apple Pencil対応）
+   
+   v0.3→v0.4 変更点:
+   ・患者「その他(詳しく)」に手書きモーダル追加
+   ・スタッフ「主訴補足」「注意メモ」に手書きモーダル追加
+   ・ペン/消しゴム/undo/redo、太さ3段階、色:黒+赤
+   ・ストロークJSON保存 + サムネPNG生成
+   ・テキスト+手書き併用設計
+   ═══════════════════════════════════════════════════════════════════════ */
+
+const C = {
+  bg: "#F5F3EE", card: "#FFFFFF", primary: "#1B6B93", primarySoft: "#E8F4F8",
+  primaryDark: "#0F4C6B", accent: "#E8805C", accentSoft: "#FFF1EC",
+  green: "#2E855A", greenSoft: "#ECFDF5", yellow: "#B8860B", yellowSoft: "#FFFBEB",
+  red: "#C53030", redSoft: "#FFF5F5", text: "#1A202C", textMid: "#4A5568",
+  textLight: "#A0AEC0", border: "#E8E4DD", shadow: "0 2px 16px rgba(0,0,0,0.06)",
+};
+const font = "'Noto Sans JP', 'Hiragino Kaku Gothic Pro', -apple-system, sans-serif";
+
+// ═══════════════════════════════════════════
+//  CANVAS ENGINE — ストローク記録 + 描画
+// ═══════════════════════════════════════════
+
+const CANVAS_W = 1024;
+const CANVAS_H = 640;
+
+// ストロークJSON形式:
+// { width: 1024, height: 640, strokes: [{ color, size, points: [{x,y,p}] }] }
+
+function drawStroke(ctx, stroke) {
+  if (!stroke.points || stroke.points.length < 2) return;
+  ctx.strokeStyle = stroke.color || "#000";
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  for (let i = 1; i < stroke.points.length; i++) {
+    const prev = stroke.points[i - 1];
+    const curr = stroke.points[i];
+    const pressure = curr.p || 1;
+    ctx.lineWidth = (stroke.size || 2) * pressure;
+    ctx.beginPath();
+    ctx.moveTo(prev.x, prev.y);
+    ctx.lineTo(curr.x, curr.y);
+    ctx.stroke();
+  }
+}
+
+function redrawAll(ctx, strokes, w, h) {
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = "#FFFFFF";
+  ctx.fillRect(0, 0, w, h);
+  // grid
+  ctx.strokeStyle = "#F0EDE8";
+  ctx.lineWidth = 0.5;
+  for (let y = 0; y < h; y += 32) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+  for (let x = 0; x < w; x += 32) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
+  for (const s of strokes) drawStroke(ctx, s);
+}
+
+function generateThumbnail(strokes, tw = 200, th = 125) {
+  const offscreen = document.createElement("canvas");
+  offscreen.width = tw;
+  offscreen.height = th;
+  const ctx = offscreen.getContext("2d");
+  ctx.fillStyle = "#FFF";
+  ctx.fillRect(0, 0, tw, th);
+  const sx = tw / CANVAS_W, sy = th / CANVAS_H;
+  ctx.scale(sx, sy);
+  for (const s of strokes) drawStroke(ctx, s);
+  return offscreen.toDataURL("image/png");
+}
+
+// ═══════════════════════════════════════════
+//  HANDWRITING MODAL — フルスクリーン
+// ═══════════════════════════════════════════
+
+function HandwritingModal({ isOpen, onClose, initialStrokes, onSave, title }) {
+  const canvasRef = useRef(null);
+  const [strokes, setStrokes] = useState([]);
+  const [redoStack, setRedoStack] = useState([]);
+  const [currentStroke, setCurrentStroke] = useState(null);
+  const [tool, setTool] = useState("pen");   // pen | eraser
+  const [color, setColor] = useState("#000000");
+  const [size, setSize] = useState(2);        // 1=fine, 2=medium, 4=thick
+  const [isPainting, setIsPainting] = useState(false);
+
+  // 初期化
+  useEffect(() => {
+    if (isOpen) {
+      setStrokes(initialStrokes || []);
+      setRedoStack([]);
+      setCurrentStroke(null);
+    }
+  }, [isOpen, initialStrokes]);
+
+  // 再描画
+  useEffect(() => {
+    if (!canvasRef.current || !isOpen) return;
+    const ctx = canvasRef.current.getContext("2d");
+    const allStrokes = currentStroke ? [...strokes, currentStroke] : strokes;
+    redrawAll(ctx, allStrokes, canvasRef.current.width, canvasRef.current.height);
+  }, [strokes, currentStroke, isOpen]);
+
+  // キャンバスサイズを親に合わせる
+  useEffect(() => {
+    if (!canvasRef.current || !isOpen) return;
+    const resize = () => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const parent = canvas.parentElement;
+      const dpr = window.devicePixelRatio || 1;
+      const rect = parent.getBoundingClientRect();
+      const aspect = CANVAS_W / CANVAS_H;
+      let w = rect.width;
+      let h = w / aspect;
+      if (h > rect.height - 10) { h = rect.height - 10; w = h * aspect; }
+      canvas.style.width = w + "px";
+      canvas.style.height = h + "px";
+      canvas.width = CANVAS_W;
+      canvas.height = CANVAS_H;
+      const ctx = canvas.getContext("2d");
+      redrawAll(ctx, strokes, CANVAS_W, CANVAS_H);
+    };
+    resize();
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, [isOpen, strokes]);
+
+  const getPos = (e) => {
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = CANVAS_W / rect.width;
+    const scaleY = CANVAS_H / rect.height;
+    const touch = e.touches ? e.touches[0] : e;
+    return {
+      x: (touch.clientX - rect.left) * scaleX,
+      y: (touch.clientY - rect.top) * scaleY,
+      p: touch.force || (e.pressure || 0.5),
+    };
+  };
+
+  const startDraw = (e) => {
+    e.preventDefault();
+    setIsPainting(true);
+    const pos = getPos(e);
+    if (tool === "eraser") {
+      // 消しゴム: 近いストロークを削除
+      eraseAt(pos.x, pos.y);
+    } else {
+      setCurrentStroke({ color, size, points: [pos] });
+      setRedoStack([]);
+    }
+  };
+
+  const moveDraw = (e) => {
+    e.preventDefault();
+    if (!isPainting) return;
+    const pos = getPos(e);
+    if (tool === "eraser") {
+      eraseAt(pos.x, pos.y);
+    } else if (currentStroke) {
+      setCurrentStroke(prev => ({ ...prev, points: [...prev.points, pos] }));
+    }
+  };
+
+  const endDraw = (e) => {
+    if (e) e.preventDefault();
+    setIsPainting(false);
+    if (tool === "pen" && currentStroke && currentStroke.points.length >= 2) {
+      setStrokes(prev => [...prev, currentStroke]);
+    }
+    setCurrentStroke(null);
+  };
+
+  const eraseAt = (x, y) => {
+    const RADIUS = 20;
+    setStrokes(prev => prev.filter(s => {
+      return !s.points.some(p => Math.hypot(p.x - x, p.y - y) < RADIUS);
+    }));
+  };
+
+  const undo = () => {
+    if (strokes.length === 0) return;
+    const last = strokes[strokes.length - 1];
+    setRedoStack(prev => [...prev, last]);
+    setStrokes(prev => prev.slice(0, -1));
+  };
+
+  const redo = () => {
+    if (redoStack.length === 0) return;
+    const last = redoStack[redoStack.length - 1];
+    setStrokes(prev => [...prev, last]);
+    setRedoStack(prev => prev.slice(0, -1));
+  };
+
+  const clearAll = () => { setRedoStack([...redoStack, ...strokes]); setStrokes([]); };
+
+  const handleSave = () => {
+    const data = { width: CANVAS_W, height: CANVAS_H, strokes };
+    const thumb = strokes.length > 0 ? generateThumbnail(strokes) : null;
+    onSave(data, thumb);
+    onClose();
+  };
+
+  if (!isOpen) return null;
+
+  const sizes = [{ v: 1, label: "細" }, { v: 2, label: "中" }, { v: 4, label: "太" }];
+  const colors = [{ v: "#000000", label: "黒" }, { v: "#DC2626", label: "赤" }];
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "#1A202C", display: "flex", flexDirection: "column" }}>
+      {/* Toolbar */}
+      <div style={{ background: "#2D3748", padding: "8px 16px", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", minHeight: 56 }}>
+        <button onClick={onClose} style={tbBtn}>✕ 閉じる</button>
+        <div style={{ width: 1, height: 28, background: "#4A5568" }} />
+
+        {/* Tool select */}
+        <button onClick={() => setTool("pen")} style={{ ...tbBtn, background: tool === "pen" ? "#4299E1" : "transparent", color: tool === "pen" ? "#fff" : "#A0AEC0" }}>✏️ ペン</button>
+        <button onClick={() => setTool("eraser")} style={{ ...tbBtn, background: tool === "eraser" ? "#4299E1" : "transparent", color: tool === "eraser" ? "#fff" : "#A0AEC0" }}>🧹 消しゴム</button>
+        <div style={{ width: 1, height: 28, background: "#4A5568" }} />
+
+        {/* Size */}
+        {sizes.map(s => (
+          <button key={s.v} onClick={() => setSize(s.v)} style={{ ...tbBtn, background: size === s.v ? "#4A5568" : "transparent" }}>
+            <span style={{ display: "inline-block", width: s.v * 4 + 4, height: s.v * 4 + 4, borderRadius: "50%", background: size === s.v ? "#fff" : "#718096" }} />
+            <span style={{ fontSize: 11, marginLeft: 4 }}>{s.label}</span>
+          </button>
+        ))}
+        <div style={{ width: 1, height: 28, background: "#4A5568" }} />
+
+        {/* Color */}
+        {colors.map(c => (
+          <button key={c.v} onClick={() => setColor(c.v)} style={{ ...tbBtn, border: color === c.v ? "2px solid #fff" : "2px solid transparent", padding: "4px 8px" }}>
+            <span style={{ display: "inline-block", width: 20, height: 20, borderRadius: 4, background: c.v }} />
+          </button>
+        ))}
+        <div style={{ width: 1, height: 28, background: "#4A5568" }} />
+
+        {/* Undo/Redo/Clear */}
+        <button onClick={undo} disabled={strokes.length === 0} style={{ ...tbBtn, opacity: strokes.length === 0 ? .3 : 1 }}>↩ 戻す</button>
+        <button onClick={redo} disabled={redoStack.length === 0} style={{ ...tbBtn, opacity: redoStack.length === 0 ? .3 : 1 }}>↪ やり直し</button>
+        <button onClick={clearAll} style={tbBtn}>🗑 全消去</button>
+
+        <div style={{ flex: 1 }} />
+        <span style={{ color: "#A0AEC0", fontSize: 13, marginRight: 8 }}>{title || "手書きメモ"}</span>
+        <button onClick={handleSave} style={{ ...tbBtn, background: "#38A169", color: "#fff", fontWeight: 700, padding: "8px 20px" }}>💾 保存</button>
+      </div>
+
+      {/* Canvas area */}
+      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: 8, overflow: "hidden" }}>
+        <canvas
+          ref={canvasRef}
+          onPointerDown={startDraw}
+          onPointerMove={moveDraw}
+          onPointerUp={endDraw}
+          onPointerLeave={endDraw}
+          onTouchStart={startDraw}
+          onTouchMove={moveDraw}
+          onTouchEnd={endDraw}
+          style={{ borderRadius: 8, cursor: tool === "eraser" ? "crosshair" : "default", touchAction: "none", maxWidth: "100%", maxHeight: "100%", boxShadow: "0 4px 32px rgba(0,0,0,0.5)" }}
+        />
+      </div>
+    </div>
+  );
+}
+
+const tbBtn = { background: "transparent", border: "none", color: "#CBD5E0", fontSize: 13, cursor: "pointer", fontFamily: font, padding: "6px 10px", borderRadius: 6, display: "inline-flex", alignItems: "center", gap: 4 };
+
+// ═══════════════════════════════════════════
+//  HANDWRITING THUMBNAIL + TRIGGER BUTTON
+// ═══════════════════════════════════════════
+
+function HandwritingField({ label, noteId, strokes, thumb, textValue, onTextChange, onStrokesChange, placeholder }) {
+  const [modalOpen, setModalOpen] = useState(false);
+
+  const handleSave = (data, thumbnailPng) => {
+    onStrokesChange(noteId, data.strokes, thumbnailPng);
+  };
+
+  return (
+    <div style={{ marginBottom: 16 }}>
+      {/* テキスト入力 */}
+      <textarea
+        value={textValue || ""}
+        onChange={e => onTextChange(e.target.value)}
+        placeholder={placeholder}
+        rows={2}
+        style={{ ...inputStyle, resize: "vertical", marginBottom: 8 }}
+      />
+      {/* 手書きボタン + サムネ */}
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+        <button onClick={() => setModalOpen(true)} style={{ ...miniBtnStyle, color: C.primary, borderColor: C.primary, flexShrink: 0 }}>
+          ✏️ 詳しく書く
+        </button>
+        {thumb && (
+          <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", cursor: "pointer", flexShrink: 0 }} onClick={() => setModalOpen(true)}>
+            <img src={thumb} alt="手書きメモ" style={{ width: 120, height: 75, objectFit: "cover", display: "block" }} />
+          </div>
+        )}
+        {strokes && strokes.length > 0 && (
+          <span style={{ fontSize: 12, color: C.textLight, alignSelf: "center" }}>{strokes.length}ストローク</span>
+        )}
+      </div>
+      <HandwritingModal
+        isOpen={modalOpen}
+        onClose={() => setModalOpen(false)}
+        initialStrokes={strokes || []}
+        onSave={handleSave}
+        title={label}
+      />
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════
+//  ALERT ENGINE (v0.3と同じ)
+// ═══════════════════════════════════════════
+function upsertAlert(alerts, newAlert) {
+  const idx = alerts.findIndex(a => a.code === newAlert.code);
+  if (idx >= 0) {
+    const lvl = { danger: 0, warning: 1, info: 2 };
+    const merged = { ...alerts[idx] };
+    if (newAlert.msg) merged.msg = newAlert.msg;
+    if (newAlert.detail !== undefined) merged.detail = newAlert.detail;
+    if (lvl[newAlert.level] < lvl[merged.level]) merged.level = newAlert.level;
+    merged.updatedAt = new Date().toISOString();
+    const result = [...alerts]; result[idx] = merged; return result;
+  }
+  return [...alerts, { ...newAlert, updatedAt: new Date().toISOString() }];
+}
+function removeAlert(alerts, code) { return alerts.filter(a => a.code !== code); }
+function classifyBp(sys, dia) { if(!sys||!dia||isNaN(sys)||isNaN(dia))return null; if(sys>=180||dia>=110)return"danger"; if(sys>=140||dia>=90)return"warning"; return null; }
+function diffDays(dateStr) { if(!dateStr)return Infinity; return Math.floor((new Date()-new Date(dateStr))/(864e5)); }
+
+// ═══════════════════
+//  APP ROOT
+// ═══════════════════
+function App() {
+  const [route, setRoute] = useState("home");
+  const [savedAnswers, setSavedAnswers] = useState(null);
+  // ★ v0.4: 手書きデータを問診からスタッフに引き渡し
+  const [savedNotes, setSavedNotes] = useState({});
+  return (
+    <div style={{ fontFamily: font, background: C.bg, minHeight: "100vh", color: C.text }}>
+      <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+      <style>{`
+        *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+        button:active{transform:scale(0.97)}
+        input:focus,textarea:focus{outline:2px solid ${C.primary};outline-offset:-1px}
+        @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+        .fade-in{animation:fadeIn .3s ease}
+        @keyframes slideDown{from{opacity:0;max-height:0}to{opacity:1;max-height:2000px}}
+        .slide-down{animation:slideDown .35s ease;overflow:hidden}
+        input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
+        input[type=number]{-moz-appearance:textfield}
+      `}</style>
+      {route==="home"&&<HomePage nav={setRoute}/>}
+      {route==="questionnaire"&&<QPage onComplete={(d,n)=>{setSavedAnswers(d);setSavedNotes(n);setRoute("done");}} onBack={()=>setRoute("home")}/>}
+      {route==="done"&&<DonePage nav={setRoute}/>}
+      {route==="staff"&&<StaffBoard answers={savedAnswers} patientNotes={savedNotes} nav={setRoute}/>}
+    </div>
+  );
+}
+
+// ═══════════════════
+//  HOME / DONE
+// ═══════════════════
+function HomePage({nav}){return<Center><Card className="fade-in" style={{padding:"56px 36px",textAlign:"center"}}><div style={{fontSize:56,marginBottom:20}}>🦷</div><h1 style={{fontSize:26,fontWeight:700,color:C.primaryDark,marginBottom:6}}>サブカルテ</h1><p style={{color:C.textLight,fontSize:14,marginBottom:44}}>歯科医院向け 問診・管理システム</p><Btn onClick={()=>nav("questionnaire")} primary>📋 問診を開始する（患者様）</Btn><Btn onClick={()=>nav("staff")} style={{marginTop:12}}>🩺 スタッフ画面へ</Btn></Card></Center>;}
+function DonePage({nav}){return<Center><Card className="fade-in" style={{padding:"56px 36px",textAlign:"center"}}><div style={{width:72,height:72,borderRadius:"50%",background:C.greenSoft,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 20px",fontSize:36}}>✓</div><h2 style={{fontSize:22,fontWeight:700,color:C.green,marginBottom:8}}>送信完了しました</h2><p style={{color:C.textMid,fontSize:15,lineHeight:1.7,marginBottom:36}}>ご回答ありがとうございます。<br/>順番が来るまでお待ちください。</p><Btn onClick={()=>nav("home")} primary>ホームへ戻る</Btn></Card></Center>;}
+
+// ═══════════════════════════════════
+//  QUESTIONNAIRE — v0.4 手書き対応
+// ═══════════════════════════════════
+const STEPS=[{id:"intro",title:"はじめに",icon:"👋"},{id:"visit",title:"歯科受診について",icon:"🏥"},{id:"today",title:"本日のご希望",icon:"📝"},{id:"health",title:"現在の体調",icon:"💊"},{id:"history",title:"既往歴",icon:"📋"},{id:"medicine",title:"お薬",icon:"💉"},{id:"allergy",title:"アレルギー",icon:"⚠️"},{id:"anesthesia",title:"麻酔・体質",icon:"🩺"},{id:"other",title:"その他",icon:"✏️"}];
+
+function QPage({onComplete,onBack}){
+  const[step,setStep]=useState(0);
+  const[a,setA]=useState({});
+  // ★ v0.4: 手書きノートを管理
+  const[notes,setNotes]=useState({});  // { noteId: { strokes:[], thumb:null } }
+  const set=useCallback((k,v)=>setA(p=>({...p,[k]:v})),[]);
+  const toggle=useCallback((k,v)=>setA(p=>{const arr=p[k]||[];return{...p,[k]:arr.includes(v)?arr.filter(x=>x!==v):[...arr,v]}}),[]);
+  const handleStrokesChange=(noteId,strokes,thumb)=>{setNotes(p=>({...p,[noteId]:{strokes,thumb}}))};
+  const next=()=>{if(step<STEPS.length-1)setStep(step+1);else onComplete(a,notes);};
+  const back=()=>{if(step>0)setStep(step-1);else onBack();};
+  const pct=((step+1)/STEPS.length)*100;
+  const views=[
+    <SIntro key={0}/>,<SVisit key={1} a={a} set={set} toggle={toggle}/>,
+    <SToday key={2} a={a} set={set} toggle={toggle}/>,<SHealth key={3} a={a} set={set}/>,
+    <SHistory key={4} a={a} toggle={toggle}/>,<SMedicine key={5} a={a} set={set} toggle={toggle}/>,
+    <SAllergy key={6} a={a} toggle={toggle}/>,<SAnesthesia key={7} a={a} set={set}/>,
+    // ★ v0.4: その他ステップに手書き対応を追加
+    <SOtherV4 key={8} a={a} set={set} notes={notes} onStrokesChange={handleStrokesChange}/>,
+  ];
+  return(
+    <div style={{maxWidth:640,margin:"0 auto",minHeight:"100vh",display:"flex",flexDirection:"column"}}>
+      <div style={{background:C.card,borderBottom:`1px solid ${C.border}`,padding:"14px 20px",position:"sticky",top:0,zIndex:20}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+          <button onClick={back} style={{background:"none",border:"none",color:C.primary,fontSize:15,fontWeight:600,cursor:"pointer",fontFamily:font}}>← 戻る</button>
+          <span style={{fontSize:13,color:C.textLight}}>{STEPS[step].icon} {step+1}/{STEPS.length}</span>
+        </div>
+        <div style={{background:C.border,borderRadius:6,height:6,overflow:"hidden"}}><div style={{background:`linear-gradient(90deg,${C.primary},${C.accent})`,height:"100%",width:`${pct}%`,borderRadius:6,transition:"width .4s"}}/></div>
+      </div>
+      <div className="fade-in" key={step} style={{flex:1,padding:"28px 20px 140px"}}>
+        <h2 style={{fontSize:22,fontWeight:700,color:C.primaryDark,marginBottom:4}}>{STEPS[step].title}</h2>
+        <div style={{height:1,background:C.border,margin:"16px 0 24px"}}/>{views[step]}
+      </div>
+      <div style={{position:"fixed",bottom:0,left:0,right:0,zIndex:20}}>
+        <div style={{maxWidth:640,margin:"0 auto",padding:"16px 20px",background:`linear-gradient(transparent,${C.bg} 30%)`}}>
+          <Btn onClick={next} primary>{step<STEPS.length-1?"次へ進む →":"✓ 送信する"}</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Q({children,sub}){return<div style={{marginBottom:16}}><p style={{fontSize:16,fontWeight:600,lineHeight:1.6}}>{children}</p>{sub&&<p style={{fontSize:13,color:C.textLight,marginTop:2}}>{sub}</p>}</div>}
+function Chips({options,selected,onSelect,multi}){const active=v=>multi?(selected||[]).includes(v):selected===v;return<div style={{display:"flex",flexWrap:"wrap",gap:10,marginBottom:24}}>{options.map(o=><button key={o} onClick={()=>onSelect(o)} style={{display:"inline-flex",alignItems:"center",gap:6,padding:"12px 18px",borderRadius:12,fontSize:15,fontWeight:active(o)?600:400,cursor:"pointer",border:`2px solid ${active(o)?C.primary:C.border}`,background:active(o)?C.primarySoft:C.card,color:active(o)?C.primaryDark:C.text,transition:"all .15s",fontFamily:font,userSelect:"none"}}>{active(o)&&"✓ "}{o}</button>)}</div>}
+function SIntro(){return<div style={{textAlign:"center",padding:"24px 0"}}><div style={{fontSize:56,marginBottom:20}}>🦷</div><h3 style={{fontSize:20,fontWeight:600,marginBottom:12}}>問診票にご協力ください</h3><p style={{color:C.textMid,lineHeight:1.8,fontSize:15}}>タップで選択するだけで約3分で完了します。</p><div style={{background:C.primarySoft,borderRadius:12,padding:"16px 20px",marginTop:28,textAlign:"left"}}><p style={{fontSize:14,color:C.primaryDark,lineHeight:1.7}}>💡 わからない項目は「わからない」を選んでください。</p></div></div>}
+function SVisit({a,set,toggle}){return<><Q>Q1. 最後に歯医者へ行ったのはいつですか？</Q><Chips options={["3ヶ月以内","1年以内","1年以上前","初めて","わからない"]} selected={a.q1_lastVisit} onSelect={v=>set("q1_lastVisit",v)}/><Q>Q2. その時の印象は？（複数選択可）</Q><Chips multi options={["痛かった","怖かった","説明がわかりにくかった","丁寧で安心できた","特に問題なかった"]} selected={a.q2_impression} onSelect={v=>toggle("q2_impression",v)}/></>}
+function SToday({a,set,toggle}){return<><Q>Q3. 本日の症状は？（複数選択可）</Q><Chips multi options={["歯が痛い","歯ぐきが腫れている","出血する","歯石が気になる","定期健診希望","詰め物が取れた","入れ歯の相談","歯周病が心配","ホワイトニング","顎が痛い","その他"]} selected={a.q3_symptoms} onSelect={v=>toggle("q3_symptoms",v)}/>{(a.q3_symptoms||[]).includes("その他")&&<Input placeholder="その他の症状" value={a.q3_other||""} onChange={e=>set("q3_other",e.target.value)}/>}<Q>Q4. 興味のある治療は？（複数選択可）</Q><Chips multi options={["矯正","ホワイトニング","インプラント","目立たない入れ歯","マウスピース","セラミック","特にない"]} selected={a.q4_treatments} onSelect={v=>toggle("q4_treatments",v)}/></>}
+function SHealth({a,set}){return<><Q>Q5. 通院中の病気はありますか？</Q><Chips options={["ある","ない","わからない"]} selected={a.q5_illness} onSelect={v=>set("q5_illness",v)}/>{a.q5_illness==="ある"&&<Input placeholder="病名をご記入ください" value={a.q5_detail||""} onChange={e=>set("q5_detail",e.target.value)}/>}</>}
+function SHistory({a,toggle}){return<><Q sub="複数選択可">これまでにかかった病気を選んでください</Q><Chips multi options={["高血圧","糖尿病","心臓疾患","脳疾患","腎臓疾患","肝臓疾患","がん","喘息","貧血","てんかん","骨粗しょう症","膠原病","その他","特になし"]} selected={a.q_history} onSelect={v=>toggle("q_history",v)}/></>}
+function SMedicine({a,set,toggle}){return<><Q>Q6. 現在お薬を飲んでいますか？</Q><Chips options={["はい","いいえ","わからない"]} selected={a.q6_med} onSelect={v=>set("q6_med",v)}/>{a.q6_med==="はい"&&<><Q sub="※薬名はスタッフが確認します">Q7. 飲んでいるお薬は？（複数選択可）</Q><Chips multi options={["血液サラサラ（抗凝固薬）","骨粗しょう症の薬","ステロイド","糖尿病の薬","その他","わからない"]} selected={a.q7_medTypes} onSelect={v=>toggle("q7_medTypes",v)}/></>}</>}
+function SAllergy({a,toggle}){return<><Q sub="複数選択可">アレルギーはありますか？</Q><Chips multi options={["薬","金属","ゴム（ラテックス）","食べ物","ない","わからない"]} selected={a.q8_allergy} onSelect={v=>toggle("q8_allergy",v)}/></>}
+function SAnesthesia({a,set}){return<><Q>Q9. 歯科麻酔で気分が悪くなったことは？</Q><Chips options={["はい","いいえ","わからない"]} selected={a.q9_anesth} onSelect={v=>set("q9_anesth",v)}/><Q>Q10. 血圧は？</Q><Chips options={["高いと言われた","普通","低い","わからない"]} selected={a.q10_bp} onSelect={v=>set("q10_bp",v)}/><Q>Q11. 喫煙は？</Q><Chips options={["吸っている","やめた","吸っていない"]} selected={a.q11_smoke} onSelect={v=>set("q11_smoke",v)}/></>}
+
+// ★ v0.4: 「その他」ステップに手書きフィールド追加
+function SOtherV4({a,set,notes,onStrokesChange}){
+  return<>
+    <Q>Q12. 妊娠中または授乳中ですか？</Q>
+    <Chips options={["はい","いいえ","該当しない"]} selected={a.q12_preg} onSelect={v=>set("q12_preg",v)}/>
+    <Q>Q13. その他気になること</Q>
+    <HandwritingField
+      label="患者メモ：その他気になること"
+      noteId="patient_other"
+      strokes={notes.patient_other?.strokes}
+      thumb={notes.patient_other?.thumb}
+      textValue={a.q13_free||""}
+      onTextChange={v=>set("q13_free",v)}
+      onStrokesChange={onStrokesChange}
+      placeholder="テキストで入力、または「✏️詳しく書く」で手書き"
+    />
+  </>;
+}
+
+// ═══════════════════════════════════════
+//  STAFF BOARD — v0.4
+// ═══════════════════════════════════════
+const DUMMY_PT={id:"P-00142",name:"山田 花子",kana:"ヤマダ ハナコ",age:52,sex:"女",lastVisit:"2025-04-10"};
+const INITIAL_ALERTS=[
+  {code:"drug:anticoagulant",level:"danger",msg:"血液サラサラの薬を服用（患者申告）",detail:null},
+  {code:"allergy:latex",level:"danger",msg:"ラテックスアレルギー（患者申告）",detail:null},
+  {code:"bp:high",level:"warning",msg:"高血圧の申告あり",detail:null},
+  {code:"drug:bisphosphonate",level:"warning",msg:"骨粗しょう症薬を服用（患者申告）",detail:null},
+  {code:"disease:diabetes",level:"warning",msg:"糖尿病（患者申告）",detail:null},
+];
+const DUMMY_OCR=[
+  {id:1,name:"ワーファリン錠 1mg",dosage:"1日1回 朝食後",checked:true},
+  {id:2,name:"アムロジピン錠 5mg",dosage:"1日1回 朝食後",checked:true},
+  {id:3,name:"ボナロン錠 35mg",dosage:"週1回 起床時",checked:false},
+  {id:4,name:"メトグルコ錠 250mg",dosage:"1日2回 朝夕食後",checked:false},
+];
+
+function StaffBoard({answers,patientNotes,nav}){
+  const[alerts,setAlerts]=useState(INITIAL_ALERTS);
+  const[additions,setAdditions]=useState({chief_note:"",site:"",drug_memo:"",drug_unchanged:false,drug_unchanged_at:null,allergy_cause:"",allergy_symptom:"",hist_disease:"",hist_doctor:"",hist_status:"",bp_sys:"",bp_dia:"",staff_memo:"",staff_memo_pinned:false,reviewed_by:null,reviewed_at:null});
+  // ★ v0.4: スタッフ手書きノート
+  const[staffNotes,setStaffNotes]=useState({});
+  const[ocrDrugs,setOcrDrugs]=useState(DUMMY_OCR);
+  const[medbookImages,setMedbookImages]=useState(0);
+  const[showOcr,setShowOcr]=useState(false);
+  const[lastMedbookConfirmed,setLastMedbookConfirmed]=useState("2024-11-15");
+
+  const pt=DUMMY_PT;
+  const ans=answers&&Object.keys(answers).length>0?answers:{q1_lastVisit:"1年以上前",q2_impression:["痛かった","説明がわかりにくかった"],q3_symptoms:["歯が痛い","歯石が気になる","歯周病が心配"],q4_treatments:["ホワイトニング","セラミック"],q5_illness:"ある",q5_detail:"高血圧、糖尿病",q_history:["高血圧","糖尿病","骨粗しょう症"],q6_med:"はい",q7_medTypes:["血液サラサラ（抗凝固薬）","骨粗しょう症の薬","糖尿病の薬"],q8_allergy:["ゴム（ラテックス）"],q9_anesth:"いいえ",q10_bp:"高いと言われた",q11_smoke:"やめた",q12_preg:"該当しない",q13_free:""};
+  const allNotes={...(patientNotes||{}),...staffNotes};
+  const setAdd=(k,v)=>setAdditions(p=>({...p,[k]:v}));
+  const handleStaffStrokesChange=(noteId,strokes,thumb)=>{setStaffNotes(p=>({...p,[noteId]:{strokes,thumb}}))};
+
+  useEffect(()=>{const days=diffDays(lastMedbookConfirmed);if(days>=365){setAlerts(prev=>upsertAlert(prev,{code:"medbook:expiry",level:"info",msg:`お薬手帳 前回確認から${Math.floor(days/30)}ヶ月経過`,detail:`→ 再確認推奨`}))}else{setAlerts(prev=>removeAlert(prev,"medbook:expiry"))}},[lastMedbookConfirmed]);
+
+  const saveAdditions=()=>{
+    let next=[...alerts];
+    const sys=parseInt(additions.bp_sys),dia=parseInt(additions.bp_dia);
+    if(additions.bp_sys&&additions.bp_dia&&!isNaN(sys)&&!isNaN(dia)){const bpLevel=classifyBp(sys,dia);if(bpLevel){next=upsertAlert(next,{code:"bp:measured",level:bpLevel,msg:`血圧 ${sys}/${dia}（実測）`,detail:bpLevel==="danger"?"→ 高血圧緊急":"→ 術前血圧確認必須"});next=removeAlert(next,"bp:high")}else{next=removeAlert(next,"bp:high");next=removeAlert(next,"bp:measured")}}
+    if(additions.drug_memo.trim()){const memo=additions.drug_memo.trim();for(const code of["drug:anticoagulant","drug:bisphosphonate","drug:steroid"]){const ex=next.find(a=>a.code===code);if(ex)next=upsertAlert(next,{code,level:ex.level,msg:ex.msg,detail:`薬剤名: ${memo}`})}}
+    if(additions.allergy_cause||additions.allergy_symptom){const parts=[];if(additions.allergy_cause)parts.push(`原因: ${additions.allergy_cause}`);if(additions.allergy_symptom)parts.push(`症状: ${additions.allergy_symptom}`);for(const al of next.filter(a=>a.code.startsWith("allergy:"))){next=upsertAlert(next,{code:al.code,level:al.level,msg:al.msg,detail:parts.join(" / ")})}}
+    if(additions.hist_disease){const parts=[additions.hist_disease];if(additions.hist_doctor)parts.push(`主治医: ${additions.hist_doctor}`);if(additions.hist_status)parts.push(`状態: ${additions.hist_status}`);for(const al of next.filter(a=>a.code.startsWith("disease:"))){next=upsertAlert(next,{code:al.code,level:al.level,msg:al.msg,detail:parts.join(" / ")})}}
+    if(additions.staff_memo&&additions.staff_memo_pinned){next=upsertAlert(next,{code:"staff:pinned",level:"info",msg:"📌 "+additions.staff_memo,detail:null})}else{next=removeAlert(next,"staff:pinned")}
+    const lvl={danger:0,warning:1,info:2};next.sort((a,b)=>lvl[a.level]-lvl[b.level]);
+    setAlerts(next.slice(0,7));setAdditions(p=>({...p,reviewed_by:"鈴木(DH)",reviewed_at:new Date().toLocaleString("ja-JP")}));
+  };
+  const confirmMedbook=()=>{let next=[...alerts];const confirmed=ocrDrugs.filter(d=>d.checked);const drugNames=confirmed.map(d=>`${d.name} ${d.dosage}`).join(", ");for(const al of next.filter(a=>a.code.startsWith("drug:"))){next=upsertAlert(next,{code:al.code,level:al.level,msg:al.msg,detail:`確定薬: ${drugNames}`})}next=removeAlert(next,"medbook:expiry");setAlerts(next);setLastMedbookConfirmed(new Date().toISOString().slice(0,10));};
+  const markUnchanged=()=>{setLastMedbookConfirmed(new Date().toISOString().slice(0,10));setAlerts(prev=>removeAlert(prev,"medbook:expiry"))};
+  const bpError=useMemo(()=>{if(!additions.bp_sys&&!additions.bp_dia)return null;const s=parseInt(additions.bp_sys),d=parseInt(additions.bp_dia);if(additions.bp_sys&&(isNaN(s)||s<60||s>260))return"上: 60〜260";if(additions.bp_dia&&(isNaN(d)||d<30||d>160))return"下: 30〜160";if(s&&d&&d>=s)return"下は上より小さく";return null},[additions.bp_sys,additions.bp_dia]);
+  const bpClass=useMemo(()=>classifyBp(parseInt(additions.bp_sys),parseInt(additions.bp_dia)),[additions.bp_sys,additions.bp_dia]);
+  const activeAlerts=alerts.filter(a=>a.code);
+  const levelIcon={danger:"🔴",warning:"🟡",info:"🔵"};
+  const levelBg={danger:{bg:"#FEE2E2",border:"#FCA5A5",text:"#991B1B"},warning:{bg:"#FEF3C7",border:"#FCD34D",text:"#92400E"},info:{bg:"#DBEAFE",border:"#93C5FD",text:"#1E40AF"}};
+  const medbookExpiryDays=diffDays(lastMedbookConfirmed);
+
+  return(
+    <div style={{maxWidth:860,margin:"0 auto",minHeight:"100vh"}}>
+      <div style={{background:C.primaryDark,color:"#fff",padding:"14px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",position:"sticky",top:0,zIndex:20}}>
+        <button onClick={()=>nav("home")} style={{background:"none",border:"none",color:"#fff",fontSize:14,cursor:"pointer",fontFamily:font}}>← 戻る</button>
+        <span style={{fontWeight:600,fontSize:15}}>患者ボード</span>
+        <span style={{fontSize:13,opacity:.7}}>{pt.id}</span>
+      </div>
+      <div style={{padding:"0 16px 40px"}}>
+        <Card style={{padding:"20px 24px",margin:"16px 0 0",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:12}}>
+          <div><h2 style={{fontSize:22,fontWeight:700}}>{pt.name}<span style={{fontSize:14,fontWeight:400,color:C.textLight,marginLeft:10}}>{pt.kana}</span></h2><p style={{color:C.textMid,fontSize:14,marginTop:4}}>{pt.age}歳 / {pt.sex} / 前回: {pt.lastVisit}</p></div>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            <MiniBtn icon="📷" label="お薬手帳撮影" color={C.accent} onClick={()=>{setMedbookImages(p=>p+1);setShowOcr(true)}}/>
+            <MiniBtn icon="➕" label="Plan追加" color={C.primary}/>
+            <MiniBtn icon="🧾" label="見積へ" color={C.textMid}/>
+          </div>
+        </Card>
+
+        {/* 主訴バナー */}
+        <ChiefBanner ans={ans} additions={additions} patientNotes={allNotes}/>
+
+        {/* アラート帯 */}
+        <Card style={{padding:"16px 20px",marginBottom:16}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}><h3 style={{fontSize:15,fontWeight:700}}>⚡ アラート</h3><span style={{fontSize:12,color:C.textLight}}>{activeAlerts.length}件</span></div>
+          {activeAlerts.length===0&&<p style={{fontSize:14,color:C.textLight}}>アラートはありません</p>}
+          {activeAlerts.map(al=>{const s=levelBg[al.level];return<div key={al.code} style={{background:s.bg,border:`1px solid ${s.border}`,borderRadius:10,padding:"10px 14px",marginBottom:8,fontSize:14,color:s.text,lineHeight:1.6}}><span style={{fontWeight:600}}>{levelIcon[al.level]} {al.msg}</span>{al.detail&&<span style={{opacity:.8,marginLeft:8,fontSize:13}}>— {al.detail}</span>}</div>})}
+        </Card>
+
+        {/* 問診カード */}
+        <Card style={{marginBottom:16,overflow:"hidden"}}>
+          <div style={{padding:"16px 20px",borderBottom:`1px solid ${C.border}`}}>
+            <h3 style={{fontSize:15,fontWeight:700,marginBottom:12}}>📋 問診回答（本日）— 患者入力</h3>
+            <Row label="最終受診" value={ans.q1_lastVisit}/><Row label="前回の印象" value={(ans.q2_impression||[]).join("、")}/><Row label="本日の症状" value={(ans.q3_symptoms||[]).join("、")} hl/><Row label="興味のある治療" value={(ans.q4_treatments||[]).join("、")}/><Row label="通院中の病気" value={ans.q5_illness==="ある"?`ある（${ans.q5_detail||""}）`:ans.q5_illness}/><Row label="既往歴" value={(ans.q_history||[]).join("、")} hl={!(ans.q_history||[]).includes("特になし")}/><Row label="服薬" value={ans.q6_med==="はい"?`はい（${(ans.q7_medTypes||[]).join("、")}）`:ans.q6_med} hl={ans.q6_med==="はい"}/><Row label="アレルギー" value={(ans.q8_allergy||[]).join("、")} hl={(ans.q8_allergy||[]).some(x=>x!=="ない"&&x!=="わからない")}/><Row label="麻酔で異常" value={ans.q9_anesth} hl={ans.q9_anesth==="はい"}/><Row label="血圧" value={ans.q10_bp} hl={ans.q10_bp==="高いと言われた"}/><Row label="喫煙" value={ans.q11_smoke}/><Row label="妊娠・授乳" value={ans.q12_preg}/>
+            {/* ★ 患者手書きサムネ表示 */}
+            {allNotes.patient_other?.thumb&&<div style={{display:"flex",padding:"8px 0",borderBottom:`1px solid ${C.border}`,gap:12,alignItems:"flex-start"}}><span style={{fontSize:13,color:C.textLight,fontWeight:500,minWidth:90}}>その他(手書き)</span><img src={allNotes.patient_other.thumb} alt="" style={{width:120,height:75,borderRadius:6,border:`1px solid ${C.border}`}}/></div>}
+            {ans.q13_free&&<Row label="その他" value={ans.q13_free}/>}
+          </div>
+          <StaffPanel additions={additions} setAdd={setAdd} bpError={bpError} bpClass={bpClass} onSave={saveAdditions} staffNotes={staffNotes} onStrokesChange={handleStaffStrokesChange}/>
+        </Card>
+
+        {/* お薬手帳 */}
+        <MedbookSection medbookImages={medbookImages} showOcr={showOcr} ocrDrugs={ocrDrugs} setOcrDrugs={setOcrDrugs} confirmMedbook={confirmMedbook} lastConfirmed={lastMedbookConfirmed} onAddImage={()=>{setMedbookImages(p=>p+1);setShowOcr(true)}} onUnchanged={markUnchanged} medbookExpiryDays={medbookExpiryDays}/>
+      </div>
+    </div>
+  );
+}
+
+// 主訴バナー
+function ChiefBanner({ans,additions,patientNotes}){
+  const tags=ans.q3_symptoms||[];const staffNote=additions.chief_note;const site=additions.site;
+  const chiefThumb=patientNotes?.staff_chief?.thumb;
+  if(tags.length===0&&!staffNote)return null;
+  return<div style={{background:"linear-gradient(135deg,#1B6B93 0%,#0F4C6B 100%)",borderRadius:"0 0 16px 16px",padding:"14px 20px 16px",marginBottom:16}}>
+    <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:(staffNote||site||chiefThumb)?10:0}}>{tags.map(t=><span key={t} style={{background:"rgba(255,255,255,0.18)",color:"#fff",padding:"5px 12px",borderRadius:8,fontSize:13,fontWeight:600}}>{t}</span>)}</div>
+    {(staffNote||site||chiefThumb)&&<div style={{borderTop:"1px solid rgba(255,255,255,0.2)",paddingTop:10}}>
+      {site&&<p style={{color:"rgba(255,255,255,0.7)",fontSize:12,marginBottom:2}}>📍 部位: {site}</p>}
+      {staffNote&&<p style={{color:"#fff",fontSize:14,fontWeight:500,lineHeight:1.5}}>🖊 {staffNote}</p>}
+      {chiefThumb&&<img src={chiefThumb} alt="" style={{width:100,height:62,borderRadius:6,marginTop:6,border:"1px solid rgba(255,255,255,0.3)"}}/>}
+    </div>}
+  </div>;
+}
+
+// ★ v0.4: スタッフ補足パネル — 手書き対応
+function StaffPanel({additions,setAdd,bpError,bpClass,onSave,staffNotes,onStrokesChange}){
+  const[open,setOpen]=useState(false);const a=additions;
+  const bpBadge=bpClass==="danger"?{label:"高血圧緊急",bg:C.redSoft,color:C.red}:bpClass==="warning"?{label:"高血圧",bg:C.yellowSoft,color:C.yellow}:(a.bp_sys&&a.bp_dia&&!bpError)?{label:"正常範囲",bg:C.greenSoft,color:C.green}:null;
+
+  return<div>
+    <button onClick={()=>setOpen(!open)} style={{width:"100%",padding:"14px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",background:a.reviewed_at?C.greenSoft:C.accentSoft,border:"none",cursor:"pointer",fontFamily:font}}>
+      <span style={{fontWeight:700,fontSize:14,color:a.reviewed_at?C.green:C.accent}}>{a.reviewed_at?`✓ スタッフ確認済み — ${a.reviewed_by} (${a.reviewed_at})`:"🖊 スタッフ補足を入力する"}</span>
+      <span style={{fontSize:18,color:C.textLight,transition:"transform .2s",transform:open?"rotate(180deg)":""}}>▾</span>
+    </button>
+    {open&&<div className="slide-down" style={{padding:"20px"}}>
+      {/* ① 主訴補足 ★手書き対応 */}
+      <FieldLabel num="①" label="主訴の補足" sub="ボード上部に固定表示 / 手書き可"/>
+      <HandwritingField label="主訴の補足" noteId="staff_chief" strokes={staffNotes.staff_chief?.strokes} thumb={staffNotes.staff_chief?.thumb} textValue={a.chief_note} onTextChange={v=>setAdd("chief_note",v)} onStrokesChange={onStrokesChange} placeholder="例：右下6番付近に自発痛、冷水痛(+)"/>
+
+      <FieldLabel num="②" label="部位"/><Input value={a.site} onChange={e=>setAdd("site",e.target.value)} placeholder="例：右下6番、左上4番"/>
+
+      <FieldLabel num="③" label="薬剤名メモ"/>
+      <div style={{display:"flex",gap:8,alignItems:"flex-start",marginBottom:12}}>
+        <textarea value={a.drug_memo} onChange={e=>setAdd("drug_memo",e.target.value)} placeholder={"例：ワーファリン 1mg 1日1回\nアムロジピン 5mg 1日1回"} rows={2} style={{...inputStyle,flex:1,marginBottom:0}}/>
+        <button onClick={()=>{setAdd("drug_unchanged",true);setAdd("drug_unchanged_at",new Date().toLocaleDateString("ja-JP"))}} style={{...miniBtnStyle,background:a.drug_unchanged?C.greenSoft:C.card,borderColor:a.drug_unchanged?C.green:C.border,color:a.drug_unchanged?C.green:C.textMid,whiteSpace:"nowrap",flexShrink:0}}>📌 変更なし</button>
+      </div>
+      {a.drug_unchanged&&<p style={{fontSize:12,color:C.green,marginBottom:16}}>✓ 前回から変更なし（{a.drug_unchanged_at}）</p>}
+
+      <FieldLabel num="④" label="アレルギー詳細"/>
+      <div style={{display:"flex",gap:8,marginBottom:16}}><div style={{flex:1}}><p style={{fontSize:12,color:C.textLight,marginBottom:4}}>原因</p><Input value={a.allergy_cause} onChange={e=>setAdd("allergy_cause",e.target.value)} placeholder="ラテックス手袋" style={{marginBottom:0}}/></div><div style={{flex:1}}><p style={{fontSize:12,color:C.textLight,marginBottom:4}}>症状</p><Input value={a.allergy_symptom} onChange={e=>setAdd("allergy_symptom",e.target.value)} placeholder="発赤・腫脹" style={{marginBottom:0}}/></div></div>
+
+      <FieldLabel num="⑤" label="既往詳細"/>
+      <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}><div style={{flex:"1 1 140px"}}><p style={{fontSize:12,color:C.textLight,marginBottom:4}}>病名</p><Input value={a.hist_disease} onChange={e=>setAdd("hist_disease",e.target.value)} placeholder="2型糖尿病" style={{marginBottom:0}}/></div><div style={{flex:"1 1 120px"}}><p style={{fontSize:12,color:C.textLight,marginBottom:4}}>主治医</p><Input value={a.hist_doctor} onChange={e=>setAdd("hist_doctor",e.target.value)} placeholder="○○内科" style={{marginBottom:0}}/></div><div style={{flex:"1 1 120px"}}><p style={{fontSize:12,color:C.textLight,marginBottom:4}}>状態</p><Input value={a.hist_status} onChange={e=>setAdd("hist_status",e.target.value)} placeholder="HbA1c 7.2" style={{marginBottom:0}}/></div></div>
+
+      <FieldLabel num="⑥" label="血圧数値" sub="severity自動判定"/>
+      <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:4}}><div style={{flex:1}}><p style={{fontSize:12,color:C.textLight,marginBottom:4}}>上</p><input type="number" value={a.bp_sys} onChange={e=>setAdd("bp_sys",e.target.value)} placeholder="145" style={{...inputStyle,marginBottom:0,textAlign:"center",fontSize:20,fontWeight:700,borderColor:bpClass==="danger"?C.red:bpClass==="warning"?C.yellow:C.border}}/></div><span style={{fontSize:24,color:C.textLight,paddingTop:18}}>/</span><div style={{flex:1}}><p style={{fontSize:12,color:C.textLight,marginBottom:4}}>下</p><input type="number" value={a.bp_dia} onChange={e=>setAdd("bp_dia",e.target.value)} placeholder="92" style={{...inputStyle,marginBottom:0,textAlign:"center",fontSize:20,fontWeight:700,borderColor:bpClass==="danger"?C.red:bpClass==="warning"?C.yellow:C.border}}/></div></div>
+      <div style={{minHeight:28,marginBottom:12}}>{bpError&&<p style={{fontSize:13,color:C.red}}>⚠ {bpError}</p>}{!bpError&&bpBadge&&<span style={{display:"inline-block",background:bpBadge.bg,color:bpBadge.color,padding:"4px 12px",borderRadius:8,fontSize:13,fontWeight:700}}>{bpClass==="danger"?"🔴":bpClass==="warning"?"🟡":"🟢"} {bpBadge.label}</span>}</div>
+
+      {/* ⑦ 注意メモ ★手書き対応 */}
+      <FieldLabel num="⑦" label="スタッフ注意メモ" sub="手書き可 / ピン留め→アラート帯に表示"/>
+      <HandwritingField label="注意メモ" noteId="staff_memo" strokes={staffNotes.staff_memo?.strokes} thumb={staffNotes.staff_memo?.thumb} textValue={a.staff_memo} onTextChange={v=>setAdd("staff_memo",v)} onStrokesChange={onStrokesChange} placeholder="例：嘔吐反射強い、開口制限あり"/>
+      <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",marginBottom:24,fontSize:14}}><input type="checkbox" checked={a.staff_memo_pinned} onChange={e=>setAdd("staff_memo_pinned",e.target.checked)} style={{width:20,height:20}}/><span>📌 アラート帯にピン留め表示する</span></label>
+
+      <Btn onClick={onSave} primary disabled={!!bpError}>💾 補足を保存してアラート更新</Btn>
+      {a.reviewed_at&&<p style={{fontSize:13,color:C.green,marginTop:12,textAlign:"center"}}>✓ 確認者: {a.reviewed_by}　確認日: {a.reviewed_at}</p>}
+    </div>}
+  </div>;
+}
+
+function FieldLabel({num,label,sub}){return<div style={{marginBottom:8,marginTop:16}}><p style={{fontSize:14,fontWeight:700,color:C.primaryDark}}><span style={{color:C.accent,marginRight:6}}>{num}</span>{label}</p>{sub&&<p style={{fontSize:12,color:C.textLight,marginTop:2}}>{sub}</p>}</div>}
+
+// お薬手帳セクション
+function MedbookSection({medbookImages,showOcr,ocrDrugs,setOcrDrugs,confirmMedbook,lastConfirmed,onAddImage,onUnchanged,medbookExpiryDays}){
+  const[open,setOpen]=useState(true);const isExpired=medbookExpiryDays>=365;const months=Math.floor(medbookExpiryDays/30);
+  return<Card style={{overflow:"hidden"}}>
+    <button onClick={()=>setOpen(!open)} style={{width:"100%",display:"flex",justifyContent:"space-between",alignItems:"center",padding:"16px 20px",background:"none",border:"none",cursor:"pointer",fontFamily:font}}>
+      <h3 style={{fontSize:15,fontWeight:700}}>💊 お薬手帳{isExpired&&<span style={{marginLeft:8,fontSize:12,color:C.red,fontWeight:700,background:C.redSoft,padding:"2px 8px",borderRadius:6}}>⏰ {months}ヶ月経過</span>}</h3>
+      <span style={{fontSize:18,color:C.textLight,transition:"transform .2s",transform:open?"rotate(180deg)":""}}>▾</span>
+    </button>
+    {open&&<div style={{padding:"0 20px 20px"}}>
+      <div style={{background:isExpired?C.redSoft:C.primarySoft,borderRadius:10,padding:"10px 14px",marginBottom:12,fontSize:13,color:isExpired?C.red:C.primaryDark,fontWeight:isExpired?600:400}}>前回確認: {lastConfirmed||"未確認"}{isExpired&&` — ${months}ヶ月経過`}{!isExpired&&lastConfirmed&&` — 次回: ${365-medbookExpiryDays}日後`}</div>
+      <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}><MiniBtn icon="📷" label="撮影" color={C.accent} onClick={onAddImage}/><MiniBtn icon="🖼️" label="画像追加" color={C.primary} onClick={onAddImage}/><MiniBtn icon="📌" label="前回から変更なし" color={C.textMid} onClick={onUnchanged}/></div>
+      {medbookImages>0&&<div style={{background:C.greenSoft,borderRadius:10,padding:"10px 14px",marginBottom:16,fontSize:14,color:C.green}}>✓ {medbookImages}枚の画像が追加されました</div>}
+      {showOcr&&<div className="slide-down">
+        <p style={{fontSize:14,fontWeight:700,marginBottom:12}}>OCR読取結果（候補）</p>
+        {ocrDrugs.map(d=><button key={d.id} onClick={()=>setOcrDrugs(prev=>prev.map(x=>x.id===d.id?{...x,checked:!x.checked}:x))} style={{display:"flex",alignItems:"center",gap:12,padding:"12px 16px",background:d.checked?C.primarySoft:C.bg,border:`2px solid ${d.checked?C.primary:C.border}`,borderRadius:12,cursor:"pointer",transition:"all .15s",marginBottom:8,width:"100%",textAlign:"left"}}><span style={{width:22,height:22,borderRadius:6,border:`2px solid ${d.checked?C.primary:C.textLight}`,background:d.checked?C.primary:"transparent",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:14,fontWeight:700,flexShrink:0}}>{d.checked&&"✓"}</span><div><p style={{fontSize:15,fontWeight:600}}>{d.name}</p><p style={{fontSize:13,color:C.textMid}}>{d.dosage}</p></div></button>)}
+        <Btn onClick={confirmMedbook} style={{marginTop:8,background:C.green,color:"#fff"}}>✓ 確定してアラート更新</Btn>
+      </div>}
+    </div>}
+  </Card>;
+}
+
+// ═══════════════════
+//  Shared UI
+// ═══════════════════
+const inputStyle={width:"100%",padding:"12px 16px",borderRadius:12,border:`2px solid ${C.border}`,fontSize:15,fontFamily:font,marginBottom:16,background:C.card,transition:"border-color .2s"};
+const miniBtnStyle={padding:"10px 14px",borderRadius:10,border:`2px solid ${C.border}`,fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:font,background:C.card};
+function Center({children}){return<div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:"100vh",padding:24}}>{children}</div>}
+function Card({children,style,className}){return<div className={className} style={{background:C.card,borderRadius:20,boxShadow:C.shadow,border:`1px solid ${C.border}`,...style}}>{children}</div>}
+function Btn({children,primary,onClick,style,disabled}){return<button onClick={onClick} disabled={disabled} style={{background:primary?C.primary:"transparent",color:primary?"#fff":C.primary,border:primary?"none":`2px solid ${C.primary}`,borderRadius:14,padding:"14px 24px",fontSize:16,fontWeight:600,cursor:disabled?"not-allowed":"pointer",fontFamily:font,width:"100%",transition:"all .15s",display:"flex",alignItems:"center",justifyContent:"center",gap:8,opacity:disabled ? 0.5 : 1,...style}}>{children}</button>}
+function Input({style:s,...props}){return<input {...props} style={{...inputStyle,...s}}/>}
+function MiniBtn({icon,label,color,onClick}){return<button onClick={onClick} style={{background:"transparent",border:`2px solid ${color}`,borderRadius:10,padding:"8px 14px",fontSize:13,fontWeight:600,color,cursor:"pointer",fontFamily:font,display:"flex",alignItems:"center",gap:4}}>{icon} {label}</button>}
+function Row({label,value,hl}){if(!value)return null;return<div style={{display:"flex",padding:"8px 0",borderBottom:`1px solid ${C.border}`,gap:12,alignItems:"flex-start"}}><span style={{fontSize:13,color:C.textLight,fontWeight:500,minWidth:90,flexShrink:0}}>{label}</span><span style={{fontSize:14,fontWeight:hl?600:400,lineHeight:1.5,color:hl?C.red:C.text,background:hl?C.redSoft:"transparent",padding:hl?"2px 8px":0,borderRadius:6}}>{value}</span></div>}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(React.createElement(App));
+  </script>
+</body>
+</html>
