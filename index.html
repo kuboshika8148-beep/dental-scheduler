@@ -131,7 +131,7 @@ header{background:var(--ink);height:52px;padding:0 20px;display:flex;align-items
 .ahdr .htc{color:var(--tc-c);}
 
 /* appt row */
-.arow{display:grid;grid-template-columns:50px 1fr 86px 86px 86px;gap:4px;align-items:start;padding:7px 12px;border-bottom:1px solid var(--border);transition:background .12s;position:relative;}
+.arow{display:grid;grid-template-columns:50px 1fr 86px 86px 86px;gap:4px;align-items:center;padding:7px 12px;border-bottom:1px solid var(--border);transition:background .12s;position:relative;}
 .arow:last-child{border-bottom:none;}
 .arow:hover{background:#f6f9fd;}
 .arow.free-flag{background:#fffbf0;}  /* "誰でも" rows get subtle highlight */
@@ -196,6 +196,15 @@ header{background:var(--ink);height:52px;padding:0 20px;display:flex;align-items
 <div class="layout">
 <!-- ══ SIDEBAR ══ -->
 <aside class="sb">
+
+  <!-- Test data -->
+  <div class="pnl">
+    <div class="ph">🧪 テストデータ</div>
+    <div class="pb">
+      <button class="rbtn" onclick="loadDemoData()" style="background:var(--amber);">🧪 デモデータで動作確認</button>
+      <p class="hint" style="margin-top:6px;">シフト読込・AI読込なしで<br>すぐに動作確認できます</p>
+    </div>
+  </div>
 
   <!-- Shift sync -->
   <div class="pnl">
@@ -310,6 +319,26 @@ const RC = {
 };
 const CHAIR_COLORS = ['#3b7dd8','#0b7c6e','#c45c15','#6e34a8','#b91c1c','#1e7e4e','#7c6400','#1a6e8a','#7c3a8a'];
 
+// DH別の背景色（PDF準拠）
+const STAFF_COLORS = [
+  '#e8d0f0', // 薄紫
+  '#f5b7c5', // ピンク
+  '#a8d8ea', // 水色
+  '#f9c89b', // オレンジ
+  '#b5e6a3', // 黄緑
+  '#fff3a3', // 黄色
+  '#f0b0b0', // サーモン
+  '#c5d9f1', // 薄青
+  '#d4edda', // ミント
+  '#f0dca0', // ゴールド
+  '#d5c4f7', // ラベンダー
+];
+function getStaffColor(staffId) {
+  if (!staffId) return '';
+  const idx = staff.filter(s=>s.role==='Dh').findIndex(s=>s.id===staffId);
+  return idx >= 0 ? STAFF_COLORS[idx % STAFF_COLORS.length] : '';
+}
+
 // Keywords that mean "anyone is fine"
 const FREE_KEYWORDS = ['誰でも','だれでも','フリー','自由','空き','どなたでも','衛生士誰でも','誰でもok','誰でもOK'];
 
@@ -326,6 +355,7 @@ let schedule = { date:'', chairs:[] };
 let staff = [];
 let manualId = 9000;
 let imgB64 = null, imgMime = null;
+let breakInfo = {}; // {staffId: {breakAssigned:bool, breakStart:min}}
 
 // ══════════════════════════════════════════════
 // INIT
@@ -387,9 +417,15 @@ function getAvailable(role, startMin, duration, excludeApptId) {
 // SUPABASE
 // ══════════════════════════════════════════════
 async function sbGet(key) {
-  const res = await fetch(`/api/shift-data?key=${key}`);
+  const res = await fetch(
+    `${SB_URL}/rest/v1/app_data?key=eq.${key}&select=value`,
+    { headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` } }
+  );
   if (!res.ok) return null;
-  return await res.json();
+  const rows = await res.json();
+  if (!rows || !rows[0]) return null;
+  const value = rows[0].value;
+  return typeof value === 'string' ? JSON.parse(value) : value;
 }
 
 async function loadShifts() {
@@ -400,16 +436,18 @@ async function loadShifts() {
   toast('シフトアプリからデータ取得中…','info');
 
   try {
-    const [allStaff, allShifts] = await Promise.all([sbGet('ds_staff'), sbGet('ds_shifts')]);
-    if (!allStaff || !allShifts) throw new Error('no data');
-
     const d = new Date(date+'T00:00:00');
     const day = d.getDate(), yr = d.getFullYear(), mo = d.getMonth();
 
+    const shiftsKey = `ds_shifts_${yr}_${mo + 1}`;
+    const [allStaff, allShifts] = await Promise.all([sbGet('ds_staff'), sbGet(shiftsKey)]);
+    if (!allStaff || !allShifts) throw new Error('no data');
+
     const getShift = s => allShifts[`${s.id}_${yr}_${mo}_${day}`] || allShifts[`${s.id}_${day}`];
 
-    const working = allStaff.filter(s => s.active && ASSIGN_ROLES.has(s.role) && WORKING.has(getShift(s)));
-    const offList = allStaff.filter(s => s.active && ASSIGN_ROLES.has(s.role) && ['休み','有給'].includes(getShift(s)));
+    const MANUAL_ONLY_IDS = new Set([21]); // 嶋津さんは手動追加のみ
+    const working = allStaff.filter(s => s.active && ASSIGN_ROLES.has(s.role) && !MANUAL_ONLY_IDS.has(s.id) && WORKING.has(getShift(s)));
+    const offList = allStaff.filter(s => s.active && ASSIGN_ROLES.has(s.role) && !MANUAL_ONLY_IDS.has(s.id) && ['休み','有給'].includes(getShift(s)));
 
     // Merge: keep manual, replace shift entries
     staff = staff.filter(s => s.source === 'manual');
@@ -644,14 +682,18 @@ async function readImg() {
     parsed.chairs = (parsed.chairs||[]).map((ch,i)=>({
       ...ch,
       color: CHAIR_COLORS[i%CHAIR_COLORS.length],
-      appointments: (ch.appointments||[]).map(a=>({
-        ...a,
-        id: Math.random().toString(36).slice(2,9),
-        isFree: a.is_free_slot || isFreeSlot(a),
-        assignDh: matchStaff(a.existing_staff,'Dh'),
-        assignDa: matchStaff(a.existing_staff,'Da'),
-        assignTC: matchStaff(a.existing_staff,'TC'),
-      }))
+      appointments: (ch.appointments||[]).map(a=>{
+        const dhFromStaff = matchStaff(a.existing_staff,'Dh');
+        const dhFromTreat = !dhFromStaff ? matchDhFromTreatment(a.treatment) : '';
+        return {
+          ...a,
+          id: Math.random().toString(36).slice(2,9),
+          isFree: a.is_free_slot || isFreeSlot(a),
+          assignDh: dhFromStaff || dhFromTreat,
+          assignDa: matchStaff(a.existing_staff,'Da'),
+          assignTC: matchStaff(a.existing_staff,'TC'),
+        };
+      })
     }));
 
     schedule = parsed;
@@ -671,7 +713,20 @@ async function readImg() {
 
 function matchStaff(name, role) {
   if(!name) return '';
-  const s = staff.filter(x=>x.active&&x.role===role).find(x=>name.includes(x.name.split(/\s/)[0])||x.name.includes(name));
+  const cands = staff.filter(x=>x.active&&x.role===role);
+  const s = cands.find(x=>name.includes(x.name.split(/\s/)[0])||x.name.includes(name));
+  return s ? s.id : '';
+}
+
+// treatmentテキストからDH名を抽出してマッチング
+function matchDhFromTreatment(treatment) {
+  if(!treatment) return '';
+  // "DH宮下" "DH 西本" "ＤＨ福山" などのパターンを検出
+  const m = treatment.match(/[DＤ][HＨ]\s*([^\s,、()（）]+)/i);
+  if(!m) return '';
+  const name = m[1];
+  const s = staff.filter(x=>x.active&&x.role==='Dh')
+    .find(x=>name.includes(x.name.split(/\s/)[0])||x.name.split(/\s/)[0].includes(name));
   return s ? s.id : '';
 }
 
@@ -691,8 +746,8 @@ function autoAssign() {
   const load = {};
   staff.filter(s=>s.active).forEach(s=>load[s.id]=0);
 
-  // 休憩管理: {staffId: breakAssigned:bool, breakStart:min}
-  const breakInfo = {};
+  // 休憩管理リセット
+  breakInfo = {};
   const BREAK_MIN = 30;
   const BREAK_WINDOW_START = toMin('10:00');
   const BREAK_WINDOW_END   = toMin('15:00');
@@ -746,20 +801,27 @@ function autoAssign() {
       }
       apptRef.assignDa = ''; // 誰でも枠にDAは不要
     } else {
-      // DH配置（全チェア）
-      if (!apptRef.assignDh) {
-        const avail = getAvailableWithBreak('Dh', startMin, dur, a.id);
-        if (avail.length) {
-          avail.sort((x,y)=>(load[x.id]||0)-(load[y.id]||0));
-          const s = avail[0];
-          apptRef.assignDh = s.id;
-          load[s.id] = (load[s.id]||0) + dur;
-          if (endMin >= BREAK_WINDOW_START && endMin <= BREAK_WINDOW_END) {
-            assignBreak(s.id, endMin);
+      // DH配置（メンテチェアのみ自動。Dr.チェアは手動）
+      if (!drChair) {
+        if (!apptRef.assignDh) {
+          const avail = getAvailableWithBreak('Dh', startMin, dur, a.id);
+          if (avail.length) {
+            avail.sort((x,y)=>(load[x.id]||0)-(load[y.id]||0));
+            const s = avail[0];
+            apptRef.assignDh = s.id;
+            load[s.id] = (load[s.id]||0) + dur;
+            if (endMin >= BREAK_WINDOW_START && endMin <= BREAK_WINDOW_END) {
+              assignBreak(s.id, endMin);
+            }
           }
+        } else {
+          load[apptRef.assignDh] = (load[apptRef.assignDh]||0) + dur;
         }
       } else {
-        load[apptRef.assignDh] = (load[apptRef.assignDh]||0) + dur;
+        // Dr.チェアのDHは手動配置のみ（既に手動で入っていればloadに加算）
+        if (apptRef.assignDh) {
+          load[apptRef.assignDh] = (load[apptRef.assignDh]||0) + dur;
+        }
       }
 
       // DA配置（Dr.チェアのみ）
@@ -791,6 +853,41 @@ function autoAssign() {
   });
 
   renderAll();
+
+  // DA未配置のDr.チェア予約を検出
+  const daShortage = [];
+  schedule.chairs.forEach(ch => {
+    if (!isDrChair(ch.name)) return;
+    ch.appointments.forEach(a => {
+      if (a.isFree) return;
+      if (!a.assignDa) daShortage.push(a);
+    });
+  });
+
+  if (daShortage.length > 0) {
+    const doDispatch = confirm(`DA助手が足りず ${daShortage.length}件 未配置です。\n空きDHをDr.チェアのDA枠に派遣しますか？`);
+    if (doDispatch) {
+      daShortage.forEach(a => {
+        if (a.assignDa) return;
+        const startMin = toMin(a.time);
+        const dur = a.duration || 30;
+        const endMin = startMin + dur;
+        const avail = staff.filter(s => s.active && s.role === 'Dh')
+          .filter(s => !isBusy(s.id, startMin, dur, a.id))
+          .filter(s => !isOnBreak(s.id, startMin, dur));
+        if (avail.length) {
+          avail.sort((x,y) => (load[x.id]||0) - (load[y.id]||0));
+          const s = avail[0];
+          a.assignDa = s.id;
+          load[s.id] = (load[s.id]||0) + dur;
+        }
+      });
+      renderAll();
+      const dispatched = daShortage.filter(a => a.assignDa).length;
+      toast(`DHを ${dispatched}件 のDr.チェアDA枠に派遣しました`,'ok');
+      return;
+    }
+  }
 
   // 休憩サマリー
   const breakCount = Object.values(breakInfo).filter(b=>b.breakAssigned).length;
@@ -826,10 +923,14 @@ function renderWL() {
     const h=Math.floor(mins/60), m=mins%60;
     const dur = mins>0?(h>0?`${h}h${m>0?m+'m':''}`:`${m}m`):'0m';
     const busy = mins > 240; // >4h flagged
-    return `<div class="wlp${busy?' busy':''}">
+    const brk = breakInfo[s.id];
+    const brkLabel = brk?.breakAssigned ? ` 🍵${minToTime(brk.breakStart)}` : '';
+    const sc = getStaffColor(s.id);
+    return `<div class="wlp${busy?' busy':''}" style="${sc?'background:'+sc+';border-color:'+sc+';':''}">
       <div class="wld" style="background:${cfg.color}"></div>
       <span>${s.name}</span>
       <span class="wlct">${dur}</span>
+      ${brkLabel ? `<span class="wlct" style="color:var(--teal);font-weight:700;">${brkLabel}</span>` : ''}
     </div>`;
   }).join('');
 }
@@ -840,17 +941,17 @@ function renderChairs() {
   const chairs = schedule.chairs||[];
   if (!chairs.length) { grid.innerHTML=''; em.style.display='block'; return; }
   em.style.display='none';
-  grid.style.gridTemplateColumns = `repeat(${Math.min(chairs.length,3)},1fr)`;
+  grid.style.gridTemplateColumns = `repeat(${Math.min(chairs.length,4)},1fr)`;
 
   grid.innerHTML = chairs.map(ch => {
     const appts = ch.appointments||[];
     const isDr = isDrChair(ch.name);
     const rows = appts.length===0
       ? `<div style="padding:14px;text-align:center;color:var(--ink3);font-size:11px;">予約なし</div>`
-      : `<div class="ahdr" style="grid-template-columns:50px 1fr 86px ${isDr?'86px ':''} 86px 86px;">
-          <span>時間</span><span>患者</span><span class="hdh">DH衛生士</span>
-          ${isDr?'<span class="hda">DA助手</span>':''}
-          <span class="htc" style="font-size:9px;">TC<span style="font-weight:400;color:#aaa;">（任意）</span></span>
+      : `<div class="ahdr" style="grid-template-columns:50px 1fr ${isDr?'86px 86px':'100px'};">
+          <span>時間</span><span>患者</span>
+          ${isDr?'<span class="hda">DA助手</span><span class="hdh">DH衛生士</span>'
+                :'<span class="hdh">DH衛生士</span>'}
         </div>`
         + appts.map(a => renderRow(a, isDr)).join('');
     return `<div class="ccard">
@@ -862,7 +963,7 @@ function renderChairs() {
   }).join('');
 }
 
-function renderRow(a, showDA=true) {
+function renderRow(a, isDr=false) {
   const free = a.isFree;
   const startMin = toMin(a.time);
   const dur = a.duration||30;
@@ -894,15 +995,16 @@ function renderRow(a, showDA=true) {
     </div>`;
   };
 
-  return `<div class="arow${free?' free-flag':''}" style="grid-template-columns:50px 1fr 86px ${showDA?'86px ':''}86px 86px;">
+  const rowH = Math.max(dur/15, 2) * 28;
+  const bgColor = getStaffColor(a.assignDh);
+  return `<div class="arow${free?' free-flag':''}" style="grid-template-columns:50px 1fr ${isDr?'86px 86px':'100px'};min-height:${rowH}px;${bgColor?'background:'+bgColor+';':''}">
     <span class="atm">${a.time||''}</span>
     <div class="apinfo">
       <div class="apname">${a.patient||'—'}</div>
       <div class="aptx${free?' free-label':''}">${free?'🔄 '+a.treatment:a.treatment||''}</div>
     </div>
+    ${isDr ? mkSel('Da','assignDa','s-da') : ''}
     ${mkSel('Dh','assignDh','s-dh')}
-    ${showDA ? mkSel('Da','assignDa','s-da') : ''}
-    ${mkSel('TC','assignTC','s-tc')}
   </div>`;
 }
 
@@ -947,7 +1049,144 @@ function updateStats() {
 function clearAll() {
   if(!confirm('予約データをリセットしますか？')) return;
   schedule={date:'',chairs:[]};
+  breakInfo={};
   renderAll();
+}
+
+// ══════════════════════════════════════════════
+// DEMO DATA
+// ══════════════════════════════════════════════
+function loadDemoData() {
+  const uid = () => Math.random().toString(36).slice(2,9);
+
+  // 出勤スタッフ（令和8年3月14日 土曜: DH10名, DA1名, TC1名）※休み DA1 DH9→1人アシスト
+  staff = [
+    { id:1,  name:'西本 由美',   role:'Dh', active:true, source:'demo' },
+    { id:2,  name:'福山 奈々',   role:'Dh', active:true, source:'demo' },
+    { id:3,  name:'宮下 真菜',   role:'Dh', active:true, source:'demo' },
+    { id:4,  name:'濱田 淑恵',   role:'Dh', active:true, source:'demo' },
+    { id:5,  name:'奥 祐佳里',   role:'Dh', active:true, source:'demo' },
+    { id:6,  name:'西森 遥香',   role:'Dh', active:true, source:'demo' },
+    { id:7,  name:'堀川 真菜',   role:'Dh', active:true, source:'demo' },
+    { id:8,  name:'橋村 優華',   role:'Dh', active:true, source:'demo' },
+    { id:10, name:'楓 かおり',   role:'Dh', active:true, source:'demo' },
+    { id:11, name:'井上 彩花',   role:'Dh', active:true, source:'demo' },
+    { id:12, name:'村山 由身子', role:'Da', active:true, source:'demo' },
+    { id:21, name:'嶋津 恵加',   role:'TC', active:true, source:'demo' },
+  ];
+
+  // 本日休みスタッフ
+  const demoOff = [
+    { id:9,  name:'岩本 真理',   role:'Dh', active:true },
+    { id:13, name:'谷 めぐみ',   role:'Da', active:true },
+    { id:14, name:'佐々木 美佳', role:'Da', active:true },
+  ];
+
+  // チェア＋予約（8チェア：メンテ1-4, Dr.5-7, 特診室）※PDFから正確にマッピング
+  schedule = {
+    date: '令和8年3月14日（土）',
+    chairs: [
+      {
+        name: 'メンテ1',
+        color: CHAIR_COLORS[0],
+        appointments: [
+          { id:uid(), time:'09:00', patient:'森 千春',       treatment:'メンテ 7回目 DH濱田',         duration:45, isFree:false, assignDh:4,  assignDa:'', assignTC:'' },
+          { id:uid(), time:'09:45', patient:'船山 美樹',     treatment:'メンテ DH西本 衛生士誰でも',  duration:45, isFree:false, assignDh:1,  assignDa:'', assignTC:'' },
+          { id:uid(), time:'10:30', patient:'酒本 美有',     treatment:'メンテ1 0回目 DH西本',        duration:45, isFree:false, assignDh:1,  assignDa:'', assignTC:'' },
+          { id:uid(), time:'11:15', patient:'佐藤 由衣',     treatment:'メンテ 堺川 ハガキ DH西本',   duration:45, isFree:false, assignDh:1,  assignDa:'', assignTC:'' },
+        ]
+      },
+      {
+        name: 'メンテ2',
+        color: CHAIR_COLORS[1],
+        appointments: [
+          { id:uid(), time:'09:00', patient:'長澤 満',       treatment:'メンテ DH宮下 衛生士誰でも',  duration:45, isFree:false, assignDh:3,  assignDa:'', assignTC:'' },
+          { id:uid(), time:'09:45', patient:'廣谷 友美',     treatment:'メンテ DH誰でも ハガキ',      duration:45, isFree:true,  assignDh:'', assignDa:'', assignTC:'' },
+          { id:uid(), time:'10:30', patient:'笹村 早紀',     treatment:'メンテ1 ハガキ DH福山',       duration:45, isFree:false, assignDh:2,  assignDa:'', assignTC:'' },
+          { id:uid(), time:'11:15', patient:'上野 心結',     treatment:'メンテP重防 DH福山',          duration:45, isFree:false, assignDh:2,  assignDa:'', assignTC:'' },
+        ]
+      },
+      {
+        name: 'メンテ3',
+        color: CHAIR_COLORS[2],
+        appointments: [
+          { id:uid(), time:'09:00', patient:'前川 奈津貴',   treatment:'メンテ DH奥',                 duration:45, isFree:false, assignDh:5,  assignDa:'', assignTC:'' },
+          { id:uid(), time:'09:45', patient:'廣谷 博博',     treatment:'メンテ 8回目 ハガキ DH奥',    duration:45, isFree:false, assignDh:5,  assignDa:'', assignTC:'' },
+          { id:uid(), time:'10:30', patient:'望月 沙綾',     treatment:'メンテ 宮下さん以外了承済み',  duration:45, isFree:false, assignDh:'', assignDa:'', assignTC:'' },
+          { id:uid(), time:'11:15', patient:'愛原 治郎',     treatment:'メンテ 2回目 DH奥',           duration:45, isFree:false, assignDh:5,  assignDa:'', assignTC:'' },
+        ]
+      },
+      {
+        name: 'メンテ4',
+        color: CHAIR_COLORS[3],
+        appointments: [
+          { id:uid(), time:'09:00', patient:'前川 博史',     treatment:'メンテ DH楓',                 duration:45, isFree:false, assignDh:10, assignDa:'', assignTC:'' },
+          { id:uid(), time:'09:45', patient:'田中 瑛真',     treatment:'メンテ 6回目 DH楓',           duration:45, isFree:false, assignDh:10, assignDa:'', assignTC:'' },
+          { id:uid(), time:'10:30', patient:'江本 彬一',     treatment:'メンテ DH宮下',               duration:45, isFree:false, assignDh:3,  assignDa:'', assignTC:'' },
+          { id:uid(), time:'11:15', patient:'増田 歩夏',     treatment:'メンテ 6回目 DH楓',           duration:45, isFree:false, assignDh:10, assignDa:'', assignTC:'' },
+        ]
+      },
+      {
+        name: 'Dr.5',
+        color: CHAIR_COLORS[4],
+        appointments: [
+          { id:uid(), time:'09:00', patient:'竹中 みか',     treatment:'1M後 L6 CAD/CAME印象 院長',   duration:30, isFree:false, assignDh:'', assignDa:'', assignTC:'' },
+          { id:uid(), time:'09:30', patient:'高橋 愛理',     treatment:'1M後 ようすみ治療相談 院長',   duration:30, isFree:false, assignDh:'', assignDa:'', assignTC:'' },
+          { id:uid(), time:'10:00', patient:'石濱 靖之',     treatment:'ベーシックセット Dr岡崎',      duration:30, isFree:false, assignDh:'', assignDa:'', assignTC:'' },
+          { id:uid(), time:'10:30', patient:'梶川 貴司',     treatment:'7 EXTして増歯 院長',           duration:30, isFree:false, assignDh:'', assignDa:'', assignTC:'' },
+          { id:uid(), time:'11:00', patient:'光田 美佐子',   treatment:'試適 技工立ち会い 院長',       duration:30, isFree:false, assignDh:'', assignDa:'', assignTC:'' },
+          { id:uid(), time:'11:30', patient:'小杉 義明',     treatment:'L56 インプラント TEKimp 院長', duration:45, isFree:false, assignDh:'', assignDa:'', assignTC:'' },
+        ]
+      },
+      {
+        name: 'Dr.6',
+        color: CHAIR_COLORS[5],
+        appointments: [
+          { id:uid(), time:'09:30', patient:'吉岡 卓哉',     treatment:'SCドック デンタル撮る DH井上', duration:30, isFree:false, assignDh:11, assignDa:'', assignTC:'' },
+          { id:uid(), time:'11:00', patient:'松田 遼平',     treatment:'P検SRP DH橋村',               duration:45, isFree:false, assignDh:8,  assignDa:'', assignTC:'' },
+        ]
+      },
+      {
+        name: 'Dr.7',
+        color: CHAIR_COLORS[6],
+        appointments: [
+          { id:uid(), time:'09:00', patient:'石川 智紹',     treatment:'7 CR除去してC処 Dr岡崎',      duration:30, isFree:false, assignDh:'', assignDa:'', assignTC:'' },
+          { id:uid(), time:'09:30', patient:'垣本 明徳',     treatment:'5 C処 Dr岡崎',                duration:30, isFree:false, assignDh:'', assignDa:'', assignTC:'' },
+          { id:uid(), time:'10:00', patient:'前田 周亮',     treatment:'7 CAD/CAMセット Dr岡崎',      duration:30, isFree:false, assignDh:'', assignDa:'', assignTC:'' },
+          { id:uid(), time:'10:30', patient:'岡崎 裕士',     treatment:'ナイトガード',                 duration:30, isFree:false, assignDh:'', assignDa:'', assignTC:'' },
+          { id:uid(), time:'11:00', patient:'吉崎 絹',       treatment:'6 CAD/CAMセット 土曜希望 Dr岡崎', duration:30, isFree:false, assignDh:'', assignDa:'', assignTC:'' },
+          { id:uid(), time:'11:00', patient:'井上 紗矢香',   treatment:'L7 C処 Dr岡崎',               duration:30, isFree:false, assignDh:'', assignDa:'', assignTC:'' },
+          { id:uid(), time:'11:30', patient:'三吉 久美子',   treatment:'6 根治 CT撮る Dr岡崎',        duration:30, isFree:false, assignDh:'', assignDa:'', assignTC:'' },
+          { id:uid(), time:'14:00', patient:'堀田 都市',     treatment:'SC+ドック DH井上',             duration:30, isFree:false, assignDh:11, assignDa:'', assignTC:'' },
+        ]
+      },
+      {
+        name: '特診室',
+        color: CHAIR_COLORS[7],
+        appointments: [
+          { id:uid(), time:'09:00', patient:'茂井 紗菜',     treatment:'メンテ子供 橋村 衛生士誰でも', duration:30, isFree:true,  assignDh:8,  assignDa:'', assignTC:'' },
+          { id:uid(), time:'09:30', patient:'茂井 楓音',     treatment:'メンテ子供 橋村 衛生士誰でも', duration:30, isFree:true,  assignDh:8,  assignDa:'', assignTC:'' },
+          { id:uid(), time:'10:00', patient:'村山 由身子',   treatment:'メンテ+SPT精検 衛生士誰でも',  duration:45, isFree:true,  assignDh:'', assignDa:'', assignTC:'' },
+          { id:uid(), time:'10:30', patient:'福岡 波琉',     treatment:'メンテ子供 DH西森',            duration:45, isFree:false, assignDh:6,  assignDa:'', assignTC:'' },
+          { id:uid(), time:'11:15', patient:'坂田 智美',     treatment:'メンテ DH西森',                duration:45, isFree:false, assignDh:6,  assignDa:'', assignTC:'' },
+          { id:uid(), time:'14:15', patient:'坂井さん',      treatment:'メンテ DH福山',                duration:30, isFree:false, assignDh:2,  assignDa:'', assignTC:'' },
+          { id:uid(), time:'15:15', patient:'中筋さん',      treatment:'メンテ',                       duration:30, isFree:false, assignDh:'', assignDa:'', assignTC:'' },
+          { id:uid(), time:'15:30', patient:'南端さん',      treatment:'メンテ DH奥 4回目',            duration:30, isFree:false, assignDh:5,  assignDa:'', assignTC:'' },
+          { id:uid(), time:'16:15', patient:'丸山さん',      treatment:'メンテ DH楓 7回目',            duration:30, isFree:false, assignDh:10, assignDa:'', assignTC:'' },
+        ]
+      },
+    ]
+  };
+
+  document.getElementById('subTtl').textContent = schedule.date;
+  // スタッフパネルも更新
+  const working = staff.filter(s => s.active);
+  renderStaffPanel(working, demoOff);
+  document.getElementById('sbadge').textContent = `出勤 ${working.length}名`;
+  document.getElementById('sbadge').className = 'sbadge ok';
+  document.getElementById('hdate').textContent = '令和8年3月14日（土）';
+  renderAll();
+  toast('デモデータを読み込みました ✓','ok');
 }
 
 // ══════════════════════════════════════════════
@@ -1015,6 +1254,11 @@ async function exportPDF() {
   doc.text(`計${tot}件 / うち「誰でも」${freeC}件 / 出勤${wStaff.length}名`,pw-mg,ph-4,{align:'right'});
   doc.save('chair-schedule.pdf');
   toast('PDFを出力しました ✓','ok');
+}
+
+function minToTime(m){
+  if(!m&&m!==0) return '';
+  return `${String(Math.floor(m/60)).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`;
 }
 
 function hexRgb(h){
