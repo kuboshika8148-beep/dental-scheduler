@@ -655,8 +655,9 @@ async function readImg() {
   // PDF テキスト or 画像で送信方法を分岐
   let contentArr;
   if (pdfText) {
-    // PDFテキストをそのまま送信（高速・タイムアウトなし）
-    contentArr = [{type:'text', text: prompt + '\n\n以下がアポイント表のテキストデータです：\n\n' + pdfText}];
+    // PDFテキストを圧縮して送信（空行除去、余分な空白削除）
+    const compactText = pdfText.split('\n').map(l=>l.trim()).filter(l=>l).join('\n');
+    contentArr = [{type:'text', text: prompt + '\n\n以下がアポイント表のテキストデータです：\n\n' + compactText}];
   } else if (imgB64) {
     contentArr = [{type:'image', source:{type:'base64', media_type:imgMime, data:imgB64}},
                   {type:'text', text:prompt}];
@@ -671,11 +672,24 @@ async function readImg() {
     const res = await fetch('/api/read-appt',{
       method:'POST', headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
-        model:'claude-sonnet-4-20250514', max_tokens:4000,
+        model:'claude-sonnet-4-20250514', max_tokens:8000,
         messages:[{role:'user',content:contentArr}]
       })
     });
-    const data = await res.json();
+    if(res.status === 504){
+      toast('タイムアウト: 処理に時間がかかりすぎました。もう一度お試しください','ng');
+      document.getElementById('rdBtn').disabled=false;
+      document.getElementById('ld').style.display='none';
+      return;
+    }
+    let data;
+    try { data = await res.json(); } catch(je) {
+      console.error('Response is not JSON:', res.status, await res.text().catch(()=>''));
+      toast(`サーバーエラー (${res.status})。もう一度お試しください`,'ng');
+      document.getElementById('rdBtn').disabled=false;
+      document.getElementById('ld').style.display='none';
+      return;
+    }
     console.log('API response status:', res.status);
     console.log('API response data:', JSON.stringify(data).substring(0,500));
     if(!res.ok){
