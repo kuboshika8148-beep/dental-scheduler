@@ -682,7 +682,7 @@ async function parsePdfLocal(uint8arr) {
     const pgItems = allItems.filter(i=>i.p===pg);
     const maxY = Math.max(...pgItems.map(i=>i.y));
     // ヘッダー付近（上位20pt以内）のアイテム
-    const headerItems = pgItems.filter(i=>i.y >= maxY - 25);
+    const headerItems = pgItems.filter(i=>i.y >= maxY - 50);
     chairPatterns.forEach(cp => {
       const found = headerItems.find(i => cp.re.test(i.s.trim()));
       if (found && !chairCols.find(c=>c.name===cp.name)) {
@@ -697,7 +697,7 @@ async function parsePdfLocal(uint8arr) {
     pages.forEach(pg => {
       const pgItems = allItems.filter(i=>i.p===pg);
       const maxY = Math.max(...pgItems.map(i=>i.y));
-      const headerItems = pgItems.filter(i=>i.y >= maxY - 25);
+      const headerItems = pgItems.filter(i=>i.y >= maxY - 50);
       console.log(`[PDF Parser] Page ${pg} header items (maxY=${maxY}):`, headerItems.map(i=>`"${i.s}"(x=${i.x},y=${i.y})`));
     });
     console.log('[PDF Parser] All unique texts (first 50):', allItems.slice(0,50).map(i=>`"${i.s}"(x=${i.x},y=${i.y})`));
