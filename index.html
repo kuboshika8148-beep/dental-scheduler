@@ -655,6 +655,7 @@ async function parsePdfLocal(uint8arr) {
       if (it.str.trim()) allItems.push({s: it.str, x: Math.round(it.transform[4]), y: Math.round(it.transform[5]), p});
     });
   }
+  console.log('[PDF Parser] Total items:', allItems.length);
   if (!allItems.length) return null;
 
   // 1) 日付
@@ -664,6 +665,7 @@ async function parsePdfLocal(uint8arr) {
     const m = it.s.match(dateRe);
     if (m) { dateStr = `令和${m[1]}年${m[2]}月${m[3]}日(${m[4]})`; break; }
   }
+  console.log('[PDF Parser] Date:', dateStr);
 
   // 2) チェアヘッダー検出（Y座標が最上位付近、既知のチェア名パターン）
   const chairPatterns = [
@@ -689,7 +691,18 @@ async function parsePdfLocal(uint8arr) {
     });
   });
   chairCols.sort((a,b) => a.x - b.x);
-  if (!chairCols.length) return null;
+  console.log('[PDF Parser] Chairs found:', chairCols.length, chairCols.map(c=>`${c.name}(x=${c.x},y=${c.headerY})`));
+  if (!chairCols.length) {
+    // デバッグ: ヘッダー付近のアイテムを表示
+    pages.forEach(pg => {
+      const pgItems = allItems.filter(i=>i.p===pg);
+      const maxY = Math.max(...pgItems.map(i=>i.y));
+      const headerItems = pgItems.filter(i=>i.y >= maxY - 25);
+      console.log(`[PDF Parser] Page ${pg} header items (maxY=${maxY}):`, headerItems.map(i=>`"${i.s}"(x=${i.x},y=${i.y})`));
+    });
+    console.log('[PDF Parser] All unique texts (first 50):', allItems.slice(0,50).map(i=>`"${i.s}"(x=${i.x},y=${i.y})`));
+    return null;
+  }
 
   // 3) 列境界を計算
   const colBounds = chairCols.map((c, i) => ({
@@ -726,6 +739,7 @@ async function parsePdfLocal(uint8arr) {
     }
   });
   allTimeMarkers.sort((a,b) => b.y - a.y); // Y降順（上から下）
+  console.log('[PDF Parser] Time markers:', allTimeMarkers.length, allTimeMarkers.slice(0,10).map(t=>`${t.label}(y=${t.y})`));
 
   // 5) コンテンツアイテムをセルに分類
   const headerY = chairCols.length > 0 ? chairCols[0].headerY : 9999;
@@ -747,6 +761,9 @@ async function parsePdfLocal(uint8arr) {
     if (!cells[key]) cells[key] = [];
     cells[key].push(it.s.trim());
   });
+
+  console.log('[PDF Parser] Content items:', contentItems.length, 'Cells:', Object.keys(cells).length);
+  console.log('[PDF Parser] Cell samples:', Object.entries(cells).slice(0,5).map(([k,v])=>`${k}=[${v.join(',')}]`));
 
   // 6) セルから予約を組み立て
   const chairMap = {}; // chairName → [{time, patient, treatment, ...}]
@@ -799,6 +816,8 @@ async function parsePdfLocal(uint8arr) {
       });
     }
   });
+
+  console.log('[PDF Parser] ChairMap totals:', Object.entries(chairMap).map(([k,v])=>`${k}:${v.length}`));
 
   // chairsを整形
   const chairs = colBounds.map(c => ({
