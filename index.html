@@ -576,7 +576,7 @@ function addManual() {
 // ══════════════════════════════════════════════
 let pdfText = null; // PDFテキスト専用
 let pdfPages = []; // ページ別テキスト
-let pdfBuffer = null; // PDF ArrayBuffer（ローカルパーサー用）
+let pdfBytes = null; // PDF Uint8Array（ローカルパーサー用）
 
 function onFile(e) {
   const f = e.target.files[0]; if(!f) return;
@@ -588,8 +588,8 @@ function onFile(e) {
     r.onload = ev => {
       // PDF.jsを使ってテキスト抽出
       const rawBuf = ev.target.result;
-      pdfBuffer = rawBuf.slice(0);
-      extractPdfText(rawBuf.slice(0)).then(text => {
+      pdfBytes = new Uint8Array(rawBuf.slice(0));
+      extractPdfText(rawBuf).then(text => {
         pdfText = text;
         imgB64 = null; imgMime = null;
         p.style.display = 'none';
@@ -644,9 +644,9 @@ async function extractPdfText(arrayBuffer) {
 }
 
 // ── ローカルPDFパーサー（座標ベース、API不要）──
-async function parsePdfLocal(arrayBuffer) {
+async function parsePdfLocal(uint8arr) {
   const pdfjsLib = await loadPdfJs();
-  const pdf = await pdfjsLib.getDocument({data: new Uint8Array(arrayBuffer)}).promise;
+  const pdf = await pdfjsLib.getDocument({data: uint8arr.slice(0)}).promise;
   let allItems = [];
   for (let p = 1; p <= pdf.numPages; p++) {
     const page = await pdf.getPage(p);
@@ -893,10 +893,10 @@ async function readImg() {
   try {
     let parsed;
 
-    if (pdfBuffer) {
+    if (pdfBytes) {
       // PDFはローカルパーサーで即時処理（API不要）
       toast('PDFを解析中...', 'info');
-      parsed = await parsePdfLocal(pdfBuffer);
+      parsed = await parsePdfLocal(pdfBytes);
       if (!parsed || !parsed.chairs || parsed.chairs.length === 0) {
         toast('PDFから予約を抽出できませんでした', 'ng');
         document.getElementById('rdBtn').disabled=false;
