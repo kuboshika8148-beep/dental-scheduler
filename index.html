@@ -925,7 +925,7 @@ async function callClaudeApi(contentArr) {
   const res = await fetch('/api/read-appt',{
     method:'POST', headers:{'Content-Type':'application/json'},
     body:JSON.stringify({
-      model:'claude-sonnet-4-20250514', max_tokens:8000,
+      model:'claude-sonnet-4-6', max_tokens:16000,
       messages:[{role:'user',content:contentArr}]
     })
   });
@@ -948,7 +948,7 @@ async function callClaudeApi(contentArr) {
 }
 
 async function readImg() {
-  if(!imgB64 && !pdfText) return;
+  if(!imgB64 && !pdfText) { toast('ファイルを選択してください','ng'); return; }
   document.getElementById('rdBtn').disabled=true;
   document.getElementById('ld').style.display='flex';
 
@@ -978,18 +978,15 @@ async function readImg() {
   try {
     let parsed;
 
-    if (pdfBytes) {
-      // PDFはローカルパーサーで即時処理（API不要）
-      toast('PDFを解析中...', 'info');
-      parsed = await parsePdfLocal(pdfBytes);
-      if (!parsed || !parsed.chairs || parsed.chairs.length === 0) {
-        toast('PDFから予約を抽出できませんでした', 'ng');
-        document.getElementById('rdBtn').disabled=false;
-        document.getElementById('ld').style.display='none';
-        return;
-      }
+    if (pdfText) {
+      // PDFテキストをClaude APIに送信
+      toast('PDFをAIで解析中...', 'info');
+      // ページ単位で送信（トークン節約）
+      const compactText = pdfPages.map((t,i)=>`=== ページ${i+1} ===\n${t.replace(/\s+/g,' ').trim()}`).join('\n');
+      const contentArr = [{type:'text', text: compactText + '\n\n' + prompt}];
+      parsed = await callClaudeApi(contentArr);
       // PDFの日付から自動でシフト読込
-      if (parsed.date) {
+      if (parsed?.date) {
         const dm = parsed.date.match(/令和(\d+)年(\d+)月(\d+)日/);
         if (dm) {
           const isoDate = `${2018+parseInt(dm[1])}-${dm[2].padStart(2,'0')}-${dm[3].padStart(2,'0')}`;
