@@ -703,12 +703,13 @@ async function parsePdfLocal(uint8arr) {
   console.log('[PDF Parser] Date:', dateStr);
 
   // 2) チェアヘッダー検出（Y座標が最上位付近、既知のチェア名パターン）
+  // 半角・全角・表記ゆれ全対応
   const chairPatterns = [
-    {re:/^メンテ[１1]$/, name:'メンテ１'}, {re:/^メンテ[２2]$/, name:'メンテ２'},
-    {re:/^メンテ[３3]$/, name:'メンテ３'}, {re:/^メンテ[４4]$/, name:'メンテ４'},
-    {re:/^Dr\.?[5５]$/, name:'Dr.5'}, {re:/^Dr\.?[6６]$/, name:'Dr.6'},
-    {re:/^Dr\.?[7７]$/, name:'Dr.7'}, {re:/^特診室$/, name:'特診室'},
-    {re:/^新患$/, name:'新患'}, {re:/ｶｳﾝｾﾘﾝｸﾞ②|カウンセリング②/, name:'カウンセリング②'},
+    {re:/[メﾒ][ンﾝ][テﾃ]\s*[１1１]/, name:'メンテ１'}, {re:/[メﾒ][ンﾝ][テﾃ]\s*[２2２]/, name:'メンテ２'},
+    {re:/[メﾒ][ンﾝ][テﾃ]\s*[３3３]/, name:'メンテ３'}, {re:/[メﾒ][ンﾝ][テﾃ]\s*[４4４]/, name:'メンテ４'},
+    {re:/[Dd][Rr]\.?\s*[5５5]/, name:'Dr.5'}, {re:/[Dd][Rr]\.?\s*[6６6６]/, name:'Dr.6'},
+    {re:/[Dd][Rr]\.?\s*[7７7７]/, name:'Dr.7'}, {re:/特診/, name:'特診室'},
+    {re:/新患/, name:'新患'}, {re:/[ｶカ][ｳウ][ﾝン][ｾセ][ﾘリ][ﾝン][ｸグ].*[②2２]/, name:'カウンセリング②'},
   ];
   // ヘッダー行のY座標を特定（各ページで最もY値が大きいチェア名のY）
   const pages = [...new Set(allItems.map(i=>i.p))];
@@ -716,8 +717,9 @@ async function parsePdfLocal(uint8arr) {
   pages.forEach(pg => {
     const pgItems = allItems.filter(i=>i.p===pg);
     const maxY = Math.max(...pgItems.map(i=>i.y));
-    // ヘッダー付近（上位20pt以内）のアイテム
     const headerItems = pgItems.filter(i=>i.y >= maxY - 50);
+    // デバッグ: 常にヘッダー付近のアイテムを表示
+    console.log(`[PDF Parser] Page ${pg} header items (maxY=${maxY}):`, headerItems.map(i=>`"${i.s}"(x=${i.x},y=${i.y})`));
     chairPatterns.forEach(cp => {
       const found = headerItems.find(i => cp.re.test(i.s.trim()));
       if (found && !chairCols.find(c=>c.name===cp.name)) {
@@ -728,14 +730,6 @@ async function parsePdfLocal(uint8arr) {
   chairCols.sort((a,b) => a.x - b.x);
   console.log('[PDF Parser] Chairs found:', chairCols.length, chairCols.map(c=>`${c.name}(x=${c.x},y=${c.headerY})`));
   if (!chairCols.length) {
-    // デバッグ: ヘッダー付近のアイテムを表示
-    pages.forEach(pg => {
-      const pgItems = allItems.filter(i=>i.p===pg);
-      const maxY = Math.max(...pgItems.map(i=>i.y));
-      const headerItems = pgItems.filter(i=>i.y >= maxY - 50);
-      console.log(`[PDF Parser] Page ${pg} header items (maxY=${maxY}):`, headerItems.map(i=>`"${i.s}"(x=${i.x},y=${i.y})`));
-    });
-    console.log('[PDF Parser] All unique texts (first 50):', allItems.slice(0,50).map(i=>`"${i.s}"(x=${i.x},y=${i.y})`));
     return null;
   }
 
