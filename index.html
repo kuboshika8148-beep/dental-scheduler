@@ -539,6 +539,7 @@ function addManual() {
 // FILE / AI READ
 // ══════════════════════════════════════════════
 let pdfText = null; // PDFテキスト専用
+let pdfPages = []; // ページ別テキスト
 
 function onFile(e) {
   const f = e.target.files[0]; if(!f) return;
@@ -579,24 +580,26 @@ function onFile(e) {
 }
 
 async function extractPdfText(arrayBuffer) {
-  // PDF.jsでテキスト抽出
+  // PDF.jsでテキスト抽出（ページ別も保存）
   const pdfjsLib = await loadPdfJs();
   const pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
   let fullText = '';
+  pdfPages = [];
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
     const tc = await page.getTextContent();
-    // テキストアイテムを位置情報付きで取得して改行を再現
     const items = tc.items;
+    let pageText = '';
     let lastY = null;
     for (const item of items) {
       if (lastY !== null && Math.abs(item.transform[5] - lastY) > 5) {
-        fullText += '\n';
+        pageText += '\n';
       }
-      fullText += item.str + ' ';
+      pageText += item.str + ' ';
       lastY = item.transform[5];
     }
-    fullText += '\n---ページ区切り---\n';
+    pdfPages.push(pageText);
+    fullText += pageText + '\n---ページ区切り---\n';
   }
   return fullText;
 }
@@ -623,6 +626,32 @@ dzEl.addEventListener('drop',e=>{
   const f=e.dataTransfer.files[0];
   if(f){const i=document.getElementById('imgIn');const dt=new DataTransfer();dt.items.add(f);i.files=dt.files;onFile({target:i});}
 });
+
+async function callClaudeApi(contentArr) {
+  const res = await fetch('/api/read-appt',{
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      model:'claude-sonnet-4-20250514', max_tokens:8000,
+      messages:[{role:'user',content:contentArr}]
+    })
+  });
+  if(res.status === 504) throw new Error('タイムアウト: 処理に時間がかかりすぎました');
+  let data;
+  try { data = await res.json(); } catch(je) {
+    throw new Error(`サーバーエラー (${res.status})`);
+  }
+  if(!res.ok) throw new Error(`API エラー: ${data.error?.message||data.error||res.status}`);
+  const text = (data.content||[]).map(c=>c.text||'').join('');
+  if(!text) throw new Error('AIからの応答が空でした');
+  let parsed;
+  try {
+    parsed = JSON.parse(text.replace(/```json|```/g,'').trim());
+  } catch(pe) {
+    console.error('JSON parse error. Raw text:', text.substring(0,2000));
+    throw new Error('AIの応答をJSON解析できませんでした');
+  }
+  return parsed;
+}
 
 async function readImg() {
   if(!imgB64 && !pdfText) return;
@@ -652,67 +681,43 @@ async function readImg() {
 }
 注意:チェア列ごとに分ける。空コマは除外。時間は左端の時間軸を参照。「誰でも」はis_free_slotをtrueに。矯正・昼休みの時間帯は除外。`;
 
-  // PDF テキスト or 画像で送信方法を分岐
-  let contentArr;
-  if (pdfText) {
-    // PDFテキストを圧縮して送信（空行除去、余分な空白削除）
-    const compactText = pdfText.split('\n').map(l=>l.trim()).filter(l=>l).join('\n');
-    contentArr = [{type:'text', text: prompt + '\n\n以下がアポイント表のテキストデータです：\n\n' + compactText}];
-  } else if (imgB64) {
-    contentArr = [{type:'image', source:{type:'base64', media_type:imgMime, data:imgB64}},
-                  {type:'text', text:prompt}];
-  } else {
-    toast('ファイルを選択してください','ng');
-    document.getElementById('rdBtn').disabled=false;
-    document.getElementById('ld').style.display='none';
-    return;
-  }
-
   try {
-    const res = await fetch('/api/read-appt',{
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        model:'claude-sonnet-4-20250514', max_tokens:8000,
-        messages:[{role:'user',content:contentArr}]
-      })
-    });
-    if(res.status === 504){
-      toast('タイムアウト: 処理に時間がかかりすぎました。もう一度お試しください','ng');
-      document.getElementById('rdBtn').disabled=false;
-      document.getElementById('ld').style.display='none';
-      return;
-    }
-    let data;
-    try { data = await res.json(); } catch(je) {
-      console.error('Response is not JSON:', res.status, await res.text().catch(()=>''));
-      toast(`サーバーエラー (${res.status})。もう一度お試しください`,'ng');
-      document.getElementById('rdBtn').disabled=false;
-      document.getElementById('ld').style.display='none';
-      return;
-    }
-    console.log('API response status:', res.status);
-    console.log('API response data:', JSON.stringify(data).substring(0,500));
-    if(!res.ok){
-      console.error('API error:', res.status, data);
-      toast(`API エラー: ${data.error?.message||data.error||res.status}`,'ng');
-      document.getElementById('rdBtn').disabled=false;
-      document.getElementById('ld').style.display='none';
-      return;
-    }
-    const text = (data.content||[]).map(c=>c.text||'').join('');
-    console.log('Claude response text (first 500):', text.substring(0,500));
-    if(!text){
-      toast('AIからの応答が空でした','ng');
-      document.getElementById('rdBtn').disabled=false;
-      document.getElementById('ld').style.display='none';
-      return;
-    }
     let parsed;
-    try {
-      parsed = JSON.parse(text.replace(/```json|```/g,'').trim());
-    } catch(pe) {
-      console.error('JSON parse error:', pe, 'Raw text:', text.substring(0,1000));
-      toast('AIの応答をJSON解析できませんでした。コンソールを確認してください','ng');
+
+    if (pdfText && pdfPages.length > 1) {
+      // 複数ページ: ページごとにAPIを呼び、結果をマージ
+      let allChairs = [];
+      let dateStr = '';
+      for (let pi = 0; pi < pdfPages.length; pi++) {
+        const compactText = pdfPages[pi].split('\n').map(l=>l.trim()).filter(l=>l).join('\n');
+        if(!compactText || compactText.length < 50) continue;
+        toast(`ページ ${pi+1}/${pdfPages.length} を読み取り中...`, 'info');
+        const contentArr = [{type:'text', text: prompt + '\n\n以下がアポイント表のページ' + (pi+1) + 'のテキストデータです：\n\n' + compactText}];
+        const pageParsed = await callClaudeApi(contentArr);
+        if(pageParsed.date && !dateStr) dateStr = pageParsed.date;
+        // チェアをマージ（同名チェアはappointmentsを結合）
+        (pageParsed.chairs||[]).forEach(pc => {
+          const existing = allChairs.find(c => c.name === pc.name);
+          if(existing) {
+            existing.appointments = existing.appointments.concat(pc.appointments||[]);
+          } else {
+            allChairs.push({...pc});
+          }
+        });
+      }
+      parsed = { date: dateStr, chairs: allChairs };
+    } else if (pdfText) {
+      // 単一ページPDF
+      const compactText = pdfText.split('\n').map(l=>l.trim()).filter(l=>l).join('\n');
+      const contentArr = [{type:'text', text: prompt + '\n\n以下がアポイント表のテキストデータです：\n\n' + compactText}];
+      parsed = await callClaudeApi(contentArr);
+    } else if (imgB64) {
+      // 画像
+      const contentArr = [{type:'image', source:{type:'base64', media_type:imgMime, data:imgB64}},
+                          {type:'text', text:prompt}];
+      parsed = await callClaudeApi(contentArr);
+    } else {
+      toast('ファイルを選択してください','ng');
       document.getElementById('rdBtn').disabled=false;
       document.getElementById('ld').style.display='none';
       return;
@@ -743,7 +748,7 @@ async function readImg() {
     toast(`${parsed.chairs.length}チェア・${tot}件読取 (うち「誰でも」${freeCount}件) ✓`,'ok');
   } catch(e) {
     console.error(e);
-    toast('読み取りに失敗しました','ng');
+    toast(e.message || '読み取りに失敗しました','ng');
   } finally {
     document.getElementById('rdBtn').disabled=false;
     document.getElementById('ld').style.display='none';
