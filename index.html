@@ -1194,10 +1194,14 @@ function autoAssign() {
         }
       }
 
-      // DA配置
+      // DA配置（DA不足時は空きDHで補充）
       if (roles.needDa) {
         if (!apptRef.assignDa) {
-          const avail = getAvailableWithBreak('Da', startMin, dur, a.id);
+          let avail = getAvailableWithBreak('Da', startMin, dur, a.id);
+          if (!avail.length) {
+            // DAが足りない → 空きDHを派遣
+            avail = getAvailableWithBreak('Dh', startMin, dur, a.id);
+          }
           if (avail.length) {
             avail.sort((x,y)=>(load[x.id]||0)-(load[y.id]||0));
             const s = avail[0];
@@ -1221,40 +1225,15 @@ function autoAssign() {
 
   renderAll();
 
-  // DA未配置の予約を検出（DA必要なチェア/処置のみ）
-  const daShortage = [];
+  // DA枠にDHが派遣された件数を集計
+  let dhAsDa = 0;
   schedule.chairs.forEach(ch => {
     ch.appointments.forEach(a => {
-      if (a.isFree) return;
-      const r = getChairRoles(ch.name, a.treatment, a.treat_type);
-      if (r.needDa && !a.assignDa) daShortage.push(a);
+      if (!a.assignDa) return;
+      const s = staff.find(x=>x.id==a.assignDa);
+      if (s && s.role === 'Dh') dhAsDa++;
     });
   });
-
-  if (daShortage.length > 0) {
-    const doDispatch = confirm(`DA助手が足りず ${daShortage.length}件 未配置です。\n空きDHをDr.チェアのDA枠に派遣しますか？`);
-    if (doDispatch) {
-      daShortage.forEach(a => {
-        if (a.assignDa) return;
-        const startMin = toMin(a.time);
-        const dur = a.duration || 30;
-        const endMin = startMin + dur;
-        const avail = staff.filter(s => s.active && s.role === 'Dh')
-          .filter(s => !isBusy(s.id, startMin, dur, a.id))
-          .filter(s => !isOnBreak(s.id, startMin, dur));
-        if (avail.length) {
-          avail.sort((x,y) => (load[x.id]||0) - (load[y.id]||0));
-          const s = avail[0];
-          a.assignDa = s.id;
-          load[s.id] = (load[s.id]||0) + dur;
-        }
-      });
-      renderAll();
-      const dispatched = daShortage.filter(a => a.assignDa).length;
-      toast(`DHを ${dispatched}件 のDr.チェアDA枠に派遣しました`,'ok');
-      return;
-    }
-  }
 
   // 休憩サマリー
   const breakCount = Object.values(breakInfo).filter(b=>b.breakAssigned).length;
@@ -1263,7 +1242,8 @@ function autoAssign() {
     return ref?.isFree && ref?.assignDh;
   }).length;
   const brkMsg = skipBreak ? '休憩なし' : `休憩${breakCount}名に確保`;
-  toast(`自動振り分け完了 ✓ / 「誰でも」${freeAssigned}件 / ${brkMsg}`,'ok');
+  const daMsg = dhAsDa > 0 ? ` / DH→DA派遣${dhAsDa}件` : '';
+  toast(`自動振り分け完了 ✓ / 「誰でも」${freeAssigned}件 / ${brkMsg}${daMsg}`,'ok');
 }
 
 // ══════════════════════════════════════════════
