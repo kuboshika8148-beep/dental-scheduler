@@ -347,6 +347,34 @@ function isDrChair(chairName) {
   return /Dr|ドクター|dr/i.test(chairName);
 }
 
+// チェア別スタッフ配置ルール
+// メンテ1-4: DHのみ
+// Dr.5,6,7: DA or DH
+// 特診室: メンテ/SC/ドック/SRP/口腔機能検査 → DH、その他(Dr処置) → DA
+// 新患/カウンセリング: DH or DA（内容次第）
+function getChairRoles(chairName, treatment) {
+  const t = (treatment||'').toLowerCase();
+  if (/^メンテ/i.test(chairName)) return {needDh:true, needDa:false};
+  if (/Dr|dr/i.test(chairName)) return {needDh:true, needDa:true};
+  if (/特診/.test(chairName)) {
+    const dhTreat = /メンテ|SC|ドック|SRP|口腔機能|ｽｹｰﾘﾝｸﾞ|スケーリング|初リコ|P検|精検|SPT/i.test(treatment);
+    return dhTreat ? {needDh:true, needDa:false} : {needDh:false, needDa:true};
+  }
+  // 新患・カウンセリングなど → DHベース
+  return {needDh:true, needDa:false};
+}
+
+// 木曜日かどうか判定
+function isThursday() {
+  const dp = document.getElementById('datePick')?.value;
+  if (dp) { const d = new Date(dp); return d.getDay() === 4; }
+  if (schedule.date) {
+    const m = schedule.date.match(/\((.)\)/);
+    if (m) return m[1] === '木';
+  }
+  return false;
+}
+
 // ══════════════════════════════════════════════
 // STATE
 // ══════════════════════════════════════════════
@@ -1016,6 +1044,7 @@ function autoAssign() {
   const BREAK_MIN = 30;
   const BREAK_WINDOW_START = toMin('10:00');
   const BREAK_WINDOW_END   = toMin('15:00');
+  const skipBreak = isThursday(); // 木曜は休憩不要
 
   // スタッフが休憩中かチェック
   function isOnBreak(staffId, startMin, dur) {
@@ -1027,9 +1056,9 @@ function autoAssign() {
 
   // 休憩を割り当て（10:00〜15:00の間で最初に空いた30分）
   function assignBreak(staffId, currentMin) {
+    if (skipBreak) return; // 木曜は休憩なし
     if (breakInfo[staffId]?.breakAssigned) return;
     if (currentMin < BREAK_WINDOW_START || currentMin >= BREAK_WINDOW_END) return;
-    // 現在の予約が終わった後に休憩を入れる
     if (!breakInfo[staffId]) breakInfo[staffId] = {};
     breakInfo[staffId].breakAssigned = true;
     breakInfo[staffId].breakStart = currentMin;
@@ -1049,7 +1078,7 @@ function autoAssign() {
     const apptRef = a._ch.appointments.find(x=>x.id===a.id);
     if (!apptRef) return;
 
-    const drChair = isDrChair(a._ch.name);
+    const roles = getChairRoles(a._ch.name, a.treatment);
 
     if (apptRef.isFree) {
       // 「誰でも」→ 空きDHを配置
@@ -1059,15 +1088,12 @@ function autoAssign() {
         const s = avail[0];
         apptRef.assignDh = s.id;
         load[s.id] = (load[s.id]||0) + dur;
-        // 休憩チェック：この予約が終わったら休憩検討
-        if (endMin >= BREAK_WINDOW_START && endMin <= BREAK_WINDOW_END) {
-          assignBreak(s.id, endMin);
-        }
+        if (endMin >= BREAK_WINDOW_START && endMin <= BREAK_WINDOW_END) assignBreak(s.id, endMin);
       }
-      apptRef.assignDa = ''; // 誰でも枠にDAは不要
+      apptRef.assignDa = '';
     } else {
-      // DH配置（メンテチェアのみ自動。Dr.チェアは手動）
-      if (!drChair) {
+      // DH配置
+      if (roles.needDh) {
         if (!apptRef.assignDh) {
           const avail = getAvailableWithBreak('Dh', startMin, dur, a.id);
           if (avail.length) {
@@ -1075,22 +1101,15 @@ function autoAssign() {
             const s = avail[0];
             apptRef.assignDh = s.id;
             load[s.id] = (load[s.id]||0) + dur;
-            if (endMin >= BREAK_WINDOW_START && endMin <= BREAK_WINDOW_END) {
-              assignBreak(s.id, endMin);
-            }
+            if (endMin >= BREAK_WINDOW_START && endMin <= BREAK_WINDOW_END) assignBreak(s.id, endMin);
           }
         } else {
           load[apptRef.assignDh] = (load[apptRef.assignDh]||0) + dur;
         }
-      } else {
-        // Dr.チェアのDHは手動配置のみ（既に手動で入っていればloadに加算）
-        if (apptRef.assignDh) {
-          load[apptRef.assignDh] = (load[apptRef.assignDh]||0) + dur;
-        }
       }
 
-      // DA配置（Dr.チェアのみ）
-      if (drChair) {
+      // DA配置
+      if (roles.needDa) {
         if (!apptRef.assignDa) {
           const avail = getAvailableWithBreak('Da', startMin, dur, a.id);
           if (avail.length) {
@@ -1098,15 +1117,12 @@ function autoAssign() {
             const s = avail[0];
             apptRef.assignDa = s.id;
             load[s.id] = (load[s.id]||0) + dur;
-            if (endMin >= BREAK_WINDOW_START && endMin <= BREAK_WINDOW_END) {
-              assignBreak(s.id, endMin);
-            }
+            if (endMin >= BREAK_WINDOW_START && endMin <= BREAK_WINDOW_END) assignBreak(s.id, endMin);
           }
         } else {
           load[apptRef.assignDa] = (load[apptRef.assignDa]||0) + dur;
         }
       } else {
-        // メンテチェア→DAは不要
         apptRef.assignDa = '';
       }
 
@@ -1119,13 +1135,13 @@ function autoAssign() {
 
   renderAll();
 
-  // DA未配置のDr.チェア予約を検出
+  // DA未配置の予約を検出（DA必要なチェア/処置のみ）
   const daShortage = [];
   schedule.chairs.forEach(ch => {
-    if (!isDrChair(ch.name)) return;
     ch.appointments.forEach(a => {
       if (a.isFree) return;
-      if (!a.assignDa) daShortage.push(a);
+      const r = getChairRoles(ch.name, a.treatment);
+      if (r.needDa && !a.assignDa) daShortage.push(a);
     });
   });
 
@@ -1160,7 +1176,8 @@ function autoAssign() {
     const ref = a._ch.appointments.find(x=>x.id===a.id);
     return ref?.isFree && ref?.assignDh;
   }).length;
-  toast(`自動振り分け完了 ✓ / 「誰でも」${freeAssigned}件 / 休憩${breakCount}名に確保`,'ok');
+  const brkMsg = skipBreak ? '木曜休憩なし' : `休憩${breakCount}名に確保`;
+  toast(`自動振り分け完了 ✓ / 「誰でも」${freeAssigned}件 / ${brkMsg}`,'ok');
 }
 
 // ══════════════════════════════════════════════
@@ -1206,19 +1223,33 @@ function renderChairs() {
   const chairs = schedule.chairs||[];
   if (!chairs.length) { grid.innerHTML=''; em.style.display='block'; return; }
   em.style.display='none';
-  grid.style.gridTemplateColumns = `repeat(${Math.min(chairs.length,4)},1fr)`;
+  // チェアごとに1列ずつ表示（最大5列）
+  grid.style.gridTemplateColumns = `repeat(${Math.min(chairs.length,5)},1fr)`;
 
   grid.innerHTML = chairs.map(ch => {
     const appts = ch.appointments||[];
+    // チェアタイプ判定（ヘッダー表示用）
+    const isMente = /^メンテ/i.test(ch.name);
     const isDr = isDrChair(ch.name);
+    const isToku = /特診/.test(ch.name);
+    let hdrCols, hdrLabels;
+    if (isMente) {
+      hdrCols = '42px 1fr 90px';
+      hdrLabels = '<span>時間</span><span>患者</span><span class="hdh">DH</span>';
+    } else if (isToku) {
+      hdrCols = '42px 1fr 80px 80px';
+      hdrLabels = '<span>時間</span><span>患者</span><span class="hda">DA</span><span class="hdh">DH</span>';
+    } else if (isDr) {
+      hdrCols = '42px 1fr 80px 80px';
+      hdrLabels = '<span>時間</span><span>患者</span><span class="hda">DA</span><span class="hdh">DH</span>';
+    } else {
+      hdrCols = '42px 1fr 90px';
+      hdrLabels = '<span>時間</span><span>患者</span><span class="hdh">DH</span>';
+    }
     const rows = appts.length===0
       ? `<div style="padding:14px;text-align:center;color:var(--ink3);font-size:11px;">予約なし</div>`
-      : `<div class="ahdr" style="grid-template-columns:50px 1fr ${isDr?'86px 86px':'100px'};">
-          <span>時間</span><span>患者</span>
-          ${isDr?'<span class="hda">DA助手</span><span class="hdh">DH衛生士</span>'
-                :'<span class="hdh">DH衛生士</span>'}
-        </div>`
-        + appts.map(a => renderRow(a, isDr)).join('');
+      : `<div class="ahdr" style="grid-template-columns:${hdrCols};">${hdrLabels}</div>`
+        + appts.map(a => renderRow(a, ch.name)).join('');
     return `<div class="ccard">
       <div class="chead">
         <div class="cname"><div class="cdot" style="background:${ch.color}"></div><span>${ch.name}</span></div>
@@ -1228,19 +1259,18 @@ function renderChairs() {
   }).join('');
 }
 
-function renderRow(a, isDr=false) {
+function renderRow(a, chairName) {
   const free = a.isFree;
   const startMin = toMin(a.time);
   const dur = a.duration||30;
+  const roles = getChairRoles(chairName, a.treatment);
 
   const mkSel = (role, field, selClass) => {
     const cands = staff.filter(s=>s.active&&s.role===role);
     const val = a[field];
     const setCls = val ? (free && field==='assignDh' ? 's-free' : selClass) : '';
 
-    // Availability hints
     const availNow = getAvailable(role, startMin, dur, a.id);
-    const busyNow = staff.filter(s=>s.active&&s.role===role).filter(s=>isBusy(s.id,startMin,dur,a.id));
     let hint = '';
     if (cands.length === 0) hint = `<div class="avail-hint none">担当なし</div>`;
     else if (availNow.length === 0) hint = `<div class="avail-hint none">⚠ 全員対応中</div>`;
@@ -1260,16 +1290,43 @@ function renderRow(a, isDr=false) {
     </div>`;
   };
 
+  const isMente = /^メンテ/i.test(chairName);
+  const isDr = /Dr|dr/i.test(chairName);
+  const isToku = /特診/.test(chairName);
+
+  let gridCols;
+  if (isMente) gridCols = '42px 1fr 90px';
+  else if (isToku || isDr) gridCols = '42px 1fr 80px 80px';
+  else gridCols = '42px 1fr 90px';
+
   const rowH = Math.max(dur/15, 2) * 28;
   const bgColor = getStaffColor(a.assignDh);
-  return `<div class="arow${free?' free-flag':''}" style="grid-template-columns:50px 1fr ${isDr?'86px 86px':'100px'};min-height:${rowH}px;${bgColor?'background:'+bgColor+';':''}">
+
+  // 特診室: 処置内容によってDA or DH列を出し分け
+  let staffCols = '';
+  if (isMente) {
+    staffCols = mkSel('Dh','assignDh','s-dh');
+  } else if (isToku) {
+    if (roles.needDa && !roles.needDh) {
+      staffCols = mkSel('Da','assignDa','s-da') + `<div></div>`;
+    } else if (roles.needDh && !roles.needDa) {
+      staffCols = `<div></div>` + mkSel('Dh','assignDh','s-dh');
+    } else {
+      staffCols = mkSel('Da','assignDa','s-da') + mkSel('Dh','assignDh','s-dh');
+    }
+  } else if (isDr) {
+    staffCols = mkSel('Da','assignDa','s-da') + mkSel('Dh','assignDh','s-dh');
+  } else {
+    staffCols = mkSel('Dh','assignDh','s-dh');
+  }
+
+  return `<div class="arow${free?' free-flag':''}" style="grid-template-columns:${gridCols};min-height:${rowH}px;${bgColor?'background:'+bgColor+';':''}">
     <span class="atm">${a.time||''}</span>
     <div class="apinfo">
       <div class="apname">${a.patient||'—'}</div>
       <div class="aptx${free?' free-label':''}">${free?'🔄 '+a.treatment:a.treatment||''}</div>
     </div>
-    ${isDr ? mkSel('Da','assignDa','s-da') : ''}
-    ${mkSel('Dh','assignDh','s-dh')}
+    ${staffCols}
   </div>`;
 }
 
