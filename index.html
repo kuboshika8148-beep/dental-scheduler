@@ -364,15 +364,22 @@ function getChairRoles(chairName, treatment) {
   return {needDh:true, needDa:false};
 }
 
-// 木曜日かどうか判定
-function isThursday() {
+// 休憩が必要か判定：土曜のみ、ただし矯正のある土曜（基本第2土曜）は不要
+function needsBreak() {
+  let dow = -1, dayOfMonth = 0;
   const dp = document.getElementById('datePick')?.value;
-  if (dp) { const d = new Date(dp); return d.getDay() === 4; }
-  if (schedule.date) {
+  if (dp) { const d = new Date(dp); dow = d.getDay(); dayOfMonth = d.getDate(); }
+  else if (schedule.date) {
     const m = schedule.date.match(/\((.)\)/);
-    if (m) return m[1] === '木';
+    if (m) dow = '日月火水木金土'.indexOf(m[1]);
+    const dm = schedule.date.match(/(\d+)日/);
+    if (dm) dayOfMonth = parseInt(dm[1]);
   }
-  return false;
+  if (dow !== 6) return false; // 土曜以外は休憩なし
+  // 第2土曜（8〜14日）は矯正日 → 休憩なし
+  if (dayOfMonth >= 8 && dayOfMonth <= 14) return false;
+  // TODO: kyosei_overridesで追加された矯正土曜も除外可能
+  return true;
 }
 
 // ══════════════════════════════════════════════
@@ -1044,7 +1051,7 @@ function autoAssign() {
   const BREAK_MIN = 30;
   const BREAK_WINDOW_START = toMin('10:00');
   const BREAK_WINDOW_END   = toMin('15:00');
-  const skipBreak = isThursday(); // 木曜は休憩不要
+  const skipBreak = !needsBreak(); // 土曜（矯正なし）のみ休憩あり
 
   // スタッフが休憩中かチェック
   function isOnBreak(staffId, startMin, dur) {
@@ -1056,7 +1063,7 @@ function autoAssign() {
 
   // 休憩を割り当て（10:00〜15:00の間で最初に空いた30分）
   function assignBreak(staffId, currentMin) {
-    if (skipBreak) return; // 木曜は休憩なし
+    if (skipBreak) return; // 土曜（矯正なし）以外は休憩不要
     if (breakInfo[staffId]?.breakAssigned) return;
     if (currentMin < BREAK_WINDOW_START || currentMin >= BREAK_WINDOW_END) return;
     if (!breakInfo[staffId]) breakInfo[staffId] = {};
@@ -1176,7 +1183,7 @@ function autoAssign() {
     const ref = a._ch.appointments.find(x=>x.id===a.id);
     return ref?.isFree && ref?.assignDh;
   }).length;
-  const brkMsg = skipBreak ? '木曜休憩なし' : `休憩${breakCount}名に確保`;
+  const brkMsg = skipBreak ? '休憩なし' : `休憩${breakCount}名に確保`;
   toast(`自動振り分け完了 ✓ / 「誰でも」${freeAssigned}件 / ${brkMsg}`,'ok');
 }
 
