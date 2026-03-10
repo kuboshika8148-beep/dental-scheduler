@@ -808,51 +808,88 @@ async function parsePdfLocal(uint8arr) {
     const [colIdx, timeLabel] = [parseInt(key.split('_')[0]), key.split('_').slice(1).join('_')];
     const chairName = colBounds[colIdx]?.name || '';
     const text = strs.join(' ');
-    // 患者ID (6桁)
-    const idMatch = text.match(/(\d{6})/);
-    if (!idMatch && !text.match(/[ぁ-ん]/)) return; // IDも日本語もなければスキップ
-    // スタッフ抽出
-    let existingStaff = '';
-    let isFree = false;
-    strs.forEach(s => {
-      const ss = s.trim();
-      if (ss.match(/^DH[^\s]{1,5}$/) && !ss.includes('誰でも')) {
-        existingStaff = ss.replace(/^DH/,'');
-      } else if (ss === '院長') {
-        // Dr chair
-      } else if (ss.match(/^Dr[^\s\.]{1,5}$/)) {
-        existingStaff = ss;
-      }
-      if (ss.includes('誰でも')) isFree = true;
-    });
-    // 患者名（IDの直前のテキスト、漢字+スペース+漢字パターン）
-    let patient = '';
-    for (let i = 0; i < strs.length; i++) {
-      if (strs[i].match(/\d{6}/)) break;
-      if (strs[i].match(/[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]/)) {
-        patient += strs[i] + ' ';
-      }
-    }
-    patient = patient.trim();
-    // 処置内容（患者名・ID・スタッフ以外のテキスト）
-    const treatment = strs.filter(s =>
-      !s.match(/^\d{6}$/) && !s.match(/^DH/) && s !== '院長' && !s.match(/^Dr[^\.]/)
-      && s !== patient.split(' ')[0] && !s.match(/^[\d]{1,2}$/)
-    ).join(' ').trim();
 
-    if (patient || idMatch) {
-      chairMap[chairName]?.push({
-        time: timeLabel,
-        patient: patient || '(不明)',
-        treatment: treatment + (isFree ? ' 衛生士誰でも' : ''),
-        duration: 30,
-        is_free_slot: isFree,
-        existing_staff: existingStaff,
+    // 日本語判定（漢字・ひらがな・カタカナ・半角カナ全て含む）
+    const hasJP = /[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uff66-\uff9f]/.test(text);
+    const idMatches = text.match(/\d{6}/g) || [];
+    if (!idMatches.length && !hasJP) return;
+
+    // セル内に複数の患者ID → 複数予約に分割
+    // IDの位置でstrsを分割
+    const apptGroups = [];
+    if (idMatches.length <= 1) {
+      apptGroups.push(strs);
+    } else {
+      let current = [];
+      let idCount = 0;
+      strs.forEach(s => {
+        if (s.match(/\d{6}/) && idCount > 0) {
+          // 新しいIDが出現 → 前のグループを確定、患者名は直前のアイテム
+          // 直前の患者名っぽいテキストを次のグループに移す
+          const lastName = current.length > 0 && current[current.length-1].match(/[\u4e00-\u9fff]/) ? current.pop() : null;
+          apptGroups.push(current);
+          current = lastName ? [lastName, s] : [s];
+        } else {
+          current.push(s);
+        }
+        if (s.match(/\d{6}/)) idCount++;
       });
+      if (current.length) apptGroups.push(current);
     }
+
+    apptGroups.forEach(grp => {
+      const grpText = grp.join(' ');
+      const idMatch = grpText.match(/(\d{6})/);
+      const grpHasJP = /[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uff66-\uff9f]/.test(grpText);
+      if (!idMatch && !grpHasJP) return;
+
+      // スタッフ抽出
+      let existingStaff = '';
+      let isFree = false;
+      grp.forEach(s => {
+        const ss = s.trim();
+        if (ss.match(/^DH[^\s]{1,5}$/) && !ss.includes('誰でも')) {
+          existingStaff = ss.replace(/^DH/,'');
+        } else if (ss.match(/^Dr[^\s\.]{1,5}$/)) {
+          existingStaff = ss;
+        }
+        if (ss.includes('誰でも')) isFree = true;
+      });
+
+      // 患者名（IDの直前のテキスト）
+      let patient = '';
+      for (let i = 0; i < grp.length; i++) {
+        if (grp[i].match(/\d{6}/)) break;
+        if (grp[i].match(/[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]/)) {
+          patient += grp[i] + ' ';
+        }
+      }
+      patient = patient.trim();
+
+      // 処置内容
+      const treatment = grp.filter(s =>
+        !s.match(/^\d{6}$/) && !s.match(/^DH/) && s !== '院長' && !s.match(/^Dr[^\.]/)
+        && s !== patient.split(' ')[0] && !s.match(/^[\d]{1,2}$/)
+      ).join(' ').trim();
+
+      if (patient || idMatch) {
+        chairMap[chairName]?.push({
+          time: timeLabel,
+          patient: patient || '(不明)',
+          treatment: treatment + (isFree ? ' 衛生士誰でも' : ''),
+          duration: 30,
+          is_free_slot: isFree,
+          existing_staff: existingStaff,
+        });
+      }
+    });
   });
 
-  console.log('[PDF Parser] ChairMap totals:', Object.entries(chairMap).map(([k,v])=>`${k}:${v.length}`));
+  const totalAppts = Object.values(chairMap).reduce((s,v)=>s+v.length,0);
+  console.log(`[PDF Parser] 合計: ${totalAppts}件`);
+  Object.entries(chairMap).forEach(([k,v])=>{
+    console.log(`[PDF Parser] ${k}: ${v.length}件`, v.map(a=>`${a.time} ${a.patient}`));
+  });
 
   // chairsを整形
   const chairs = colBounds.map(c => ({
@@ -1001,7 +1038,8 @@ async function readImg() {
     renderAll();
     const tot = parsed.chairs.reduce((s,c)=>s+c.appointments.length,0);
     const freeCount = parsed.chairs.reduce((s,c)=>s+c.appointments.filter(a=>a.isFree).length,0);
-    toast(`${parsed.chairs.length}チェア・${tot}件読取 (うち「誰でも」${freeCount}件) ✓`,'ok');
+    const perChair = parsed.chairs.map(c=>`${c.name}:${c.appointments.length}`).join(' / ');
+    toast(`${tot}件読取 (誰でも${freeCount}件) ${perChair} ✓`,'ok');
   } catch(e) {
     console.error(e);
     toast(e.message || '読み取りに失敗しました','ng');
