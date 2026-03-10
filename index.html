@@ -903,6 +903,16 @@ async function readImg() {
         document.getElementById('ld').style.display='none';
         return;
       }
+      // PDFの日付から自動でシフト読込
+      if (parsed.date) {
+        const dm = parsed.date.match(/令和(\d+)年(\d+)月(\d+)日/);
+        if (dm) {
+          const isoDate = `${2018+parseInt(dm[1])}-${dm[2].padStart(2,'0')}-${dm[3].padStart(2,'0')}`;
+          document.getElementById('datePick').value = isoDate;
+          toast('シフトデータを自動取得中...', 'info');
+          await loadShifts();
+        }
+      }
     } else if (imgB64) {
       // 画像はClaude APIで処理
       const contentArr = [{type:'image', source:{type:'base64', media_type:imgMime, data:imgB64}},
