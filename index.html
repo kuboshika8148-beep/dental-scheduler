@@ -428,6 +428,17 @@ async function sbGet(key) {
   return typeof value === 'string' ? JSON.parse(value) : value;
 }
 
+// 正規化テーブルから直接取得
+async function sbQuery(table, params) {
+  const qs = Object.entries(params).map(([k,v])=>`${k}=${encodeURIComponent(v)}`).join('&');
+  const res = await fetch(
+    `${SB_URL}/rest/v1/${table}?${qs}`,
+    { headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` } }
+  );
+  if (!res.ok) return null;
+  return await res.json();
+}
+
 async function loadShifts() {
   const date = document.getElementById('datePick').value;
   if (!date) { toast('日付を選択してください','ng'); return; }
@@ -437,17 +448,42 @@ async function loadShifts() {
 
   try {
     const d = new Date(date+'T00:00:00');
-    const day = d.getDate(), yr = d.getFullYear(), mo = d.getMonth();
+    const day = d.getDate(), yr = d.getFullYear(), mo = d.getMonth(); // mo: 0-indexed
 
-    const shiftsKey = `ds_shifts_${yr}_${mo + 1}`;
-    const [allStaff, allShifts] = await Promise.all([sbGet('ds_staff'), sbGet(shiftsKey)]);
-    if (!allStaff || !allShifts) throw new Error('no data');
+    // 正規化テーブルから取得（staff + shifts）
+    const [allStaff, shiftRows] = await Promise.all([
+      sbQuery('staff', {select:'id,name,role,active', order:'id'}),
+      sbQuery('shifts', {select:'staff_id,shift_type', year:`eq.${yr}`, month:`eq.${mo}`, day:`eq.${day}`, is_preview:'eq.false'}),
+    ]);
 
-    const getShift = s => allShifts[`${s.id}_${yr}_${mo}_${day}`] || allShifts[`${s.id}_${day}`];
+    if (!allStaff || allStaff.length === 0) {
+      // フォールバック: 旧app_dataテーブルから取得
+      console.log('正規化テーブルにデータなし、旧テーブルにフォールバック');
+      const oldStaff = await sbGet('ds_staff');
+      const oldShiftsKey = `ds_shifts_${yr}_${mo}`;
+      const oldShifts = await sbGet(oldShiftsKey);
+      if (!oldStaff || !oldShifts) throw new Error('no data');
+      const getShift = s => oldShifts[`${s.id}_${day}`];
+      const MANUAL_ONLY_IDS = new Set([21]);
+      const working = oldStaff.filter(s => s.active && ASSIGN_ROLES.has(s.role) && !MANUAL_ONLY_IDS.has(s.id) && WORKING.has(getShift(s)));
+      const offList = oldStaff.filter(s => s.active && ASSIGN_ROLES.has(s.role) && !MANUAL_ONLY_IDS.has(s.id) && ['休み','有給'].includes(getShift(s)));
+      staff = staff.filter(s => s.source === 'manual');
+      working.forEach(s => staff.push({ id:s.id, name:s.name, role:s.role, active:true, source:'shift' }));
+      document.getElementById('hdate').textContent = fmtJP(date);
+      el.textContent = `出勤 ${working.length}名`; el.className = 'sbadge ok';
+      renderStaffPanel(working, offList);
+      renderAll();
+      toast(`${working.length}名の出勤スタッフを取得しました ✓`,'ok');
+      return;
+    }
+
+    // シフトデータをマップ化
+    const shiftMap = {};
+    (shiftRows||[]).forEach(r => { shiftMap[r.staff_id] = r.shift_type; });
 
     const MANUAL_ONLY_IDS = new Set([21]); // 嶋津さんは手動追加のみ
-    const working = allStaff.filter(s => s.active && ASSIGN_ROLES.has(s.role) && !MANUAL_ONLY_IDS.has(s.id) && WORKING.has(getShift(s)));
-    const offList = allStaff.filter(s => s.active && ASSIGN_ROLES.has(s.role) && !MANUAL_ONLY_IDS.has(s.id) && ['休み','有給'].includes(getShift(s)));
+    const working = allStaff.filter(s => s.active && ASSIGN_ROLES.has(s.role) && !MANUAL_ONLY_IDS.has(s.id) && WORKING.has(shiftMap[s.id]));
+    const offList = allStaff.filter(s => s.active && ASSIGN_ROLES.has(s.role) && !MANUAL_ONLY_IDS.has(s.id) && ['休み','有給'].includes(shiftMap[s.id]));
 
     // Merge: keep manual, replace shift entries
     staff = staff.filter(s => s.source === 'manual');
@@ -540,6 +576,7 @@ function addManual() {
 // ══════════════════════════════════════════════
 let pdfText = null; // PDFテキスト専用
 let pdfPages = []; // ページ別テキスト
+let pdfBuffer = null; // PDF ArrayBuffer（ローカルパーサー用）
 
 function onFile(e) {
   const f = e.target.files[0]; if(!f) return;
@@ -550,6 +587,7 @@ function onFile(e) {
     const r = new FileReader();
     r.onload = ev => {
       // PDF.jsを使ってテキスト抽出
+      pdfBuffer = ev.target.result;
       extractPdfText(ev.target.result).then(text => {
         pdfText = text;
         imgB64 = null; imgMime = null;
@@ -602,6 +640,176 @@ async function extractPdfText(arrayBuffer) {
     fullText += pageText + '\n---ページ区切り---\n';
   }
   return fullText;
+}
+
+// ── ローカルPDFパーサー（座標ベース、API不要）──
+async function parsePdfLocal(arrayBuffer) {
+  const pdfjsLib = await loadPdfJs();
+  const pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
+  let allItems = [];
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    const tc = await page.getTextContent();
+    tc.items.forEach(it => {
+      if (it.str.trim()) allItems.push({s: it.str, x: Math.round(it.transform[4]), y: Math.round(it.transform[5]), p});
+    });
+  }
+  if (!allItems.length) return null;
+
+  // 1) 日付
+  const dateRe = /令和(\d+)年(\d+)月(\d+)日\((.)\)/;
+  let dateStr = '';
+  for (const it of allItems) {
+    const m = it.s.match(dateRe);
+    if (m) { dateStr = `令和${m[1]}年${m[2]}月${m[3]}日(${m[4]})`; break; }
+  }
+
+  // 2) チェアヘッダー検出（Y座標が最上位付近、既知のチェア名パターン）
+  const chairPatterns = [
+    {re:/^メンテ[１1]$/, name:'メンテ１'}, {re:/^メンテ[２2]$/, name:'メンテ２'},
+    {re:/^メンテ[３3]$/, name:'メンテ３'}, {re:/^メンテ[４4]$/, name:'メンテ４'},
+    {re:/^Dr\.?[5５]$/, name:'Dr.5'}, {re:/^Dr\.?[6６]$/, name:'Dr.6'},
+    {re:/^Dr\.?[7７]$/, name:'Dr.7'}, {re:/^特診室$/, name:'特診室'},
+    {re:/^新患$/, name:'新患'}, {re:/ｶｳﾝｾﾘﾝｸﾞ②|カウンセリング②/, name:'カウンセリング②'},
+  ];
+  // ヘッダー行のY座標を特定（各ページで最もY値が大きいチェア名のY）
+  const pages = [...new Set(allItems.map(i=>i.p))];
+  const chairCols = []; // {name, x, page}
+  pages.forEach(pg => {
+    const pgItems = allItems.filter(i=>i.p===pg);
+    const maxY = Math.max(...pgItems.map(i=>i.y));
+    // ヘッダー付近（上位20pt以内）のアイテム
+    const headerItems = pgItems.filter(i=>i.y >= maxY - 25);
+    chairPatterns.forEach(cp => {
+      const found = headerItems.find(i => cp.re.test(i.s.trim()));
+      if (found && !chairCols.find(c=>c.name===cp.name)) {
+        chairCols.push({name: cp.name, x: found.x, pg: found.p, headerY: found.y});
+      }
+    });
+  });
+  chairCols.sort((a,b) => a.x - b.x);
+  if (!chairCols.length) return null;
+
+  // 3) 列境界を計算
+  const colBounds = chairCols.map((c, i) => ({
+    name: c.name,
+    left: i === 0 ? 50 : Math.round((chairCols[i-1].x + c.x) / 2),
+    right: i === chairCols.length - 1 ? 9999 : Math.round((c.x + chairCols[i+1].x) / 2),
+  }));
+
+  // 4) 時間マーカー検出（X座標が左端付近）
+  const timeSlots = []; // {label, y, min}
+  const hourRe = /^(\d{1,2}):(\d{2})$/;
+  const subRe = /^(15|30|45)$/;
+  allItems.forEach(it => {
+    if (it.x > 50) return; // 時間列は左端
+    const hm = it.s.trim().match(hourRe);
+    if (hm) {
+      timeSlots.push({label: it.s.trim(), y: it.y, min: parseInt(hm[1])*60+parseInt(hm[2]), p: it.p});
+    }
+  });
+  // 15/30/45マーカー: 直前のhour+sub
+  let lastHour = 0;
+  const allTimeMarkers = [...timeSlots]; // copy hours
+  allItems.forEach(it => {
+    if (it.x > 50) return;
+    const sm = it.s.trim().match(subRe);
+    if (sm) {
+      // 最も近い上のhourを探す
+      const nearHour = timeSlots.filter(t=>t.p===it.p && t.y > it.y).sort((a,b)=>a.y-b.y)[0];
+      if (nearHour) {
+        const h = Math.floor(nearHour.min / 60);
+        const m = parseInt(sm[1]);
+        allTimeMarkers.push({label: `${String(h).padStart(2,'0')}:${sm[1]}`, y: it.y, min: h*60+m, p: it.p});
+      }
+    }
+  });
+  allTimeMarkers.sort((a,b) => b.y - a.y); // Y降順（上から下）
+
+  // 5) コンテンツアイテムをセルに分類
+  const headerY = chairCols.length > 0 ? chairCols[0].headerY : 9999;
+  const contentItems = allItems.filter(it => it.y < headerY - 10);
+  // 各アイテムをcol+timeSlotに割り当て
+  const cells = {}; // "colIdx_timeLabel" → [strings]
+  contentItems.forEach(it => {
+    const col = colBounds.findIndex(c => it.x >= c.left && it.x < c.right);
+    if (col < 0) return;
+    // 最も近いtimeMarker（同ページ、Y座標が近い上のマーカー）
+    const pgMarkers = allTimeMarkers.filter(t => t.p === it.p);
+    let best = null, bestDist = 9999;
+    pgMarkers.forEach(t => {
+      const d = t.y - it.y; // positive = marker is above
+      if (d >= -5 && d < bestDist) { bestDist = d; best = t; }
+    });
+    if (!best) return;
+    const key = `${col}_${best.label}`;
+    if (!cells[key]) cells[key] = [];
+    cells[key].push(it.s.trim());
+  });
+
+  // 6) セルから予約を組み立て
+  const chairMap = {}; // chairName → [{time, patient, treatment, ...}]
+  colBounds.forEach((c,ci) => { chairMap[c.name] = []; });
+
+  Object.entries(cells).forEach(([key, strs]) => {
+    const [colIdx, timeLabel] = [parseInt(key.split('_')[0]), key.split('_').slice(1).join('_')];
+    const chairName = colBounds[colIdx]?.name || '';
+    const text = strs.join(' ');
+    // 患者ID (6桁)
+    const idMatch = text.match(/(\d{6})/);
+    if (!idMatch && !text.match(/[ぁ-ん]/)) return; // IDも日本語もなければスキップ
+    // スタッフ抽出
+    let existingStaff = '';
+    let isFree = false;
+    strs.forEach(s => {
+      const ss = s.trim();
+      if (ss.match(/^DH[^\s]{1,5}$/) && !ss.includes('誰でも')) {
+        existingStaff = ss.replace(/^DH/,'');
+      } else if (ss === '院長') {
+        // Dr chair
+      } else if (ss.match(/^Dr[^\s\.]{1,5}$/)) {
+        existingStaff = ss;
+      }
+      if (ss.includes('誰でも')) isFree = true;
+    });
+    // 患者名（IDの直前のテキスト、漢字+スペース+漢字パターン）
+    let patient = '';
+    for (let i = 0; i < strs.length; i++) {
+      if (strs[i].match(/\d{6}/)) break;
+      if (strs[i].match(/[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]/)) {
+        patient += strs[i] + ' ';
+      }
+    }
+    patient = patient.trim();
+    // 処置内容（患者名・ID・スタッフ以外のテキスト）
+    const treatment = strs.filter(s =>
+      !s.match(/^\d{6}$/) && !s.match(/^DH/) && s !== '院長' && !s.match(/^Dr[^\.]/)
+      && s !== patient.split(' ')[0] && !s.match(/^[\d]{1,2}$/)
+    ).join(' ').trim();
+
+    if (patient || idMatch) {
+      chairMap[chairName]?.push({
+        time: timeLabel,
+        patient: patient || '(不明)',
+        treatment: treatment + (isFree ? ' 衛生士誰でも' : ''),
+        duration: 30,
+        is_free_slot: isFree,
+        existing_staff: existingStaff,
+      });
+    }
+  });
+
+  // chairsを整形
+  const chairs = colBounds.map(c => ({
+    name: c.name,
+    appointments: (chairMap[c.name]||[]).sort((a,b) => {
+      const [ah,am] = a.time.split(':').map(Number);
+      const [bh,bm] = b.time.split(':').map(Number);
+      return (ah*60+am) - (bh*60+bm);
+    })
+  })).filter(c => c.appointments.length > 0);
+
+  return { date: dateStr, chairs };
 }
 
 function loadPdfJs() {
@@ -684,35 +892,18 @@ async function readImg() {
   try {
     let parsed;
 
-    if (pdfText && pdfPages.length > 1) {
-      // 複数ページ: ページごとにAPIを呼び、結果をマージ
-      let allChairs = [];
-      let dateStr = '';
-      for (let pi = 0; pi < pdfPages.length; pi++) {
-        const compactText = pdfPages[pi].split('\n').map(l=>l.trim()).filter(l=>l).join('\n');
-        if(!compactText || compactText.length < 50) continue;
-        toast(`ページ ${pi+1}/${pdfPages.length} を読み取り中...`, 'info');
-        const contentArr = [{type:'text', text: prompt + '\n\n以下がアポイント表のページ' + (pi+1) + 'のテキストデータです：\n\n' + compactText}];
-        const pageParsed = await callClaudeApi(contentArr);
-        if(pageParsed.date && !dateStr) dateStr = pageParsed.date;
-        // チェアをマージ（同名チェアはappointmentsを結合）
-        (pageParsed.chairs||[]).forEach(pc => {
-          const existing = allChairs.find(c => c.name === pc.name);
-          if(existing) {
-            existing.appointments = existing.appointments.concat(pc.appointments||[]);
-          } else {
-            allChairs.push({...pc});
-          }
-        });
+    if (pdfBuffer) {
+      // PDFはローカルパーサーで即時処理（API不要）
+      toast('PDFを解析中...', 'info');
+      parsed = await parsePdfLocal(pdfBuffer);
+      if (!parsed || !parsed.chairs || parsed.chairs.length === 0) {
+        toast('PDFから予約を抽出できませんでした', 'ng');
+        document.getElementById('rdBtn').disabled=false;
+        document.getElementById('ld').style.display='none';
+        return;
       }
-      parsed = { date: dateStr, chairs: allChairs };
-    } else if (pdfText) {
-      // 単一ページPDF
-      const compactText = pdfText.split('\n').map(l=>l.trim()).filter(l=>l).join('\n');
-      const contentArr = [{type:'text', text: prompt + '\n\n以下がアポイント表のテキストデータです：\n\n' + compactText}];
-      parsed = await callClaudeApi(contentArr);
     } else if (imgB64) {
-      // 画像
+      // 画像はClaude APIで処理
       const contentArr = [{type:'image', source:{type:'base64', media_type:imgMime, data:imgB64}},
                           {type:'text', text:prompt}];
       parsed = await callClaudeApi(contentArr);
