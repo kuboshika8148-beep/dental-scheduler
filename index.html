@@ -1552,68 +1552,96 @@ function loadDemoData() {
 // ══════════════════════════════════════════════
 // PDF EXPORT
 // ══════════════════════════════════════════════
-async function exportPDF() {
+function exportPDF() {
   const chairs = schedule.chairs||[];
   if(!chairs.length){ toast('予約データがありません','ng'); return; }
-  const {jsPDF}=window.jspdf;
-  const doc=new jsPDF({orientation:'landscape',unit:'mm',format:'a4'});
-  const pw=297,ph=210,mg=12;
-  const gN=id=>{if(!id)return'—';const s=staff.find(x=>x.id==id);return s?s.name:'—';};
-
-  // Header
-  doc.setFillColor(13,23,32); doc.rect(0,0,pw,15,'F');
-  doc.setTextColor(255,255,255); doc.setFont('helvetica','bold'); doc.setFontSize(13);
-  doc.text('Chair Schedule — Staff Assignment',mg,10);
-  doc.setFont('helvetica','normal'); doc.setFontSize(8);
-  doc.text(schedule.date||document.getElementById('datePick').value,pw-mg,10,{align:'right'});
-
-  // Working staff list
+  const gN=id=>{if(!id)return'';const s=staff.find(x=>x.id==id);return s?s.name:'';};
   const wStaff = staff.filter(s=>s.active);
-  doc.setFontSize(7.5); doc.setTextColor(180,195,210);
-  doc.text('出勤: '+wStaff.map(s=>s.name).join('・'),mg,14);
-
-  let y=20;
-  const cols=[mg,mg+20,mg+58,mg+96,mg+120,mg+144];
-  const hdrs=['時間','患者名','処置内容','DH 衛生士','DA 助手','TC'];
-
-  chairs.forEach(ch=>{
-    const appts=ch.appointments||[];
-    if(!appts.length) return;
-    if(y+14+appts.length*8>ph-12){doc.addPage();y=16;}
-    const rgb=hexRgb(ch.color)||{r:30,g:45,b:64};
-    doc.setFillColor(rgb.r,rgb.g,rgb.b); doc.rect(0,y-4,pw,9,'F');
-    doc.setTextColor(255,255,255); doc.setFont('helvetica','bold'); doc.setFontSize(10);
-    doc.text(ch.name,mg,y+2);
-    doc.setFontSize(7.5);
-    doc.text(`${appts.length}件`,pw-mg,y+2,{align:'right'});
-    y+=10;
-    doc.setFillColor(228,234,245); doc.rect(0,y-4,pw,7,'F');
-    doc.setTextColor(70,90,120); doc.setFont('helvetica','bold'); doc.setFontSize(7);
-    hdrs.forEach((h,i)=>doc.text(h,cols[i],y));
-    y+=8;
-    appts.forEach((a,i)=>{
-      if(y>ph-12){doc.addPage();y=16;}
-      if(i%2===0){doc.setFillColor(a.isFree?255:247,a.isFree?251:250,a.isFree?230:254); doc.rect(0,y-5,pw,8,'F');}
-      doc.setTextColor(20,40,60); doc.setFont('helvetica','normal'); doc.setFontSize(8.5);
-      const tx=(a.isFree?'★ ':'')+((a.treatment||'').slice(0,14));
-      [a.time||'', (a.patient||'').slice(0,12),tx,gN(a.assignDh),gN(a.assignDa),gN(a.assignTC)].forEach((v,i)=>
-        doc.text(String(v),cols[i],y)
-      );
-      doc.setDrawColor(218,226,240); doc.line(0,y+2,pw,y+2);
-      y+=8;
-    });
-    y+=5;
-  });
-
-  // Footer
-  doc.setFillColor(13,23,32); doc.rect(0,ph-9,pw,9,'F');
-  doc.setTextColor(140,160,180); doc.setFont('helvetica','normal'); doc.setFontSize(6.5);
+  const dateStr = schedule.date || document.getElementById('datePick').value;
   const tot=chairs.reduce((s,c)=>s+(c.appointments?.length||0),0);
   const freeC=chairs.reduce((s,c)=>s+(c.appointments?.filter(a=>a.isFree).length||0),0);
-  doc.text('歯科クリニック スタッフ配置システム',mg,ph-4);
-  doc.text(`計${tot}件 / うち「誰でも」${freeC}件 / 出勤${wStaff.length}名`,pw-mg,ph-4,{align:'right'});
-  doc.save('chair-schedule.pdf');
-  toast('PDFを出力しました ✓','ok');
+
+  // チェアごとのテーブルHTML生成
+  let chairsHtml = '';
+  chairs.forEach(ch => {
+    const appts = ch.appointments||[];
+    if(!appts.length) return;
+    const isMente = /^メンテ/i.test(ch.name);
+    let rows = '';
+    appts.forEach(a => {
+      const roles = getChairRoles(ch.name, a.treatment, a.treat_type);
+      const assignee = roles.needDh ? gN(a.assignDh) : gN(a.assignDa);
+      const roleLabel = roles.needDh ? 'DH' : 'DA';
+      const freeTag = a.isFree ? '<span style="color:#b45309;font-weight:700;">誰でも</span> ' : '';
+      const typeBadge = !isMente && a.treat_type ? `<span class="p-badge p-${a.treat_type==='DH'?'dh':'dr'}">${a.treat_type}</span>` : '';
+      rows += `<tr${a.isFree?' style="background:#fffbeb;"':''}>
+        <td class="p-time">${a.time||''}</td>
+        <td>${a.patient||'—'} ${typeBadge}</td>
+        <td>${freeTag}${a.treatment||''}</td>
+        <td class="p-staff">${assignee ? `<span class="p-tag p-tag-${roleLabel.toLowerCase()}">${roleLabel}</span>${assignee}` : '<span style="color:#aaa;">未配置</span>'}</td>
+      </tr>`;
+    });
+    chairsHtml += `
+      <div class="p-chair">
+        <div class="p-chair-head" style="background:${ch.color||'#1e293b'};">
+          <span>${ch.name}</span><span>${appts.length}件</span>
+        </div>
+        <table class="p-tbl">
+          <thead><tr><th style="width:42px;">時間</th><th>患者名</th><th>処置内容</th><th style="width:100px;">担当</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  });
+
+  // 出勤スタッフ一覧
+  const staffByRole = {};
+  wStaff.forEach(s => { if(!staffByRole[s.role]) staffByRole[s.role]=[]; staffByRole[s.role].push(s.name); });
+  const staffHtml = Object.entries(staffByRole).map(([r,names])=>`<span class="p-role">${r}</span> ${names.join('、')}`).join('　');
+
+  const w = window.open('','_blank');
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>スタッフ配置表 ${dateStr}</title>
+<style>
+@page{size:A4 landscape;margin:8mm;}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Noto Sans JP','Hiragino Sans','Yu Gothic',sans-serif;font-size:9px;color:#1a1a1a;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+.p-header{background:#0d1720;color:#fff;padding:6px 12px;display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;}
+.p-header h1{font-size:13px;font-weight:700;}
+.p-header .p-date{font-size:11px;}
+.p-staff-bar{font-size:8px;color:#4a5568;padding:2px 12px 6px;border-bottom:1px solid #ddd;margin-bottom:4px;}
+.p-role{background:#e2e8f0;padding:1px 4px;border-radius:3px;font-weight:700;font-size:7px;}
+.p-grid{display:grid;grid-template-columns:repeat(${Math.min(chairs.filter(c=>c.appointments?.length).length,5)},1fr);gap:4px;padding:0 4px;}
+.p-chair{break-inside:avoid;border:1px solid #ccc;border-radius:4px;overflow:hidden;margin-bottom:4px;}
+.p-chair-head{color:#fff;padding:3px 8px;font-size:9px;font-weight:700;display:flex;justify-content:space-between;}
+.p-tbl{width:100%;border-collapse:collapse;font-size:8px;}
+.p-tbl th{background:#f1f5f9;text-align:left;padding:2px 4px;font-size:7px;color:#64748b;border-bottom:1px solid #ddd;}
+.p-tbl td{padding:2px 4px;border-bottom:1px solid #eee;vertical-align:top;}
+.p-time{font-family:monospace;font-weight:700;white-space:nowrap;}
+.p-staff{white-space:nowrap;}
+.p-tag{font-size:6px;padding:0px 3px;border-radius:2px;font-weight:700;margin-right:2px;vertical-align:middle;}
+.p-tag-dh{background:#dbeafe;color:#1d4ed8;}
+.p-tag-da{background:#dcfce7;color:#15803d;}
+.p-badge{font-size:6px;padding:0 3px;border-radius:2px;font-weight:700;margin-left:3px;vertical-align:middle;}
+.p-dh{background:#dbeafe;color:#1d4ed8;}
+.p-dr{background:#fce7f3;color:#be185d;}
+.p-footer{margin-top:4px;padding:4px 12px;font-size:7px;color:#888;display:flex;justify-content:space-between;border-top:1px solid #ddd;}
+@media print{.p-no-print{display:none;}}
+</style></head><body>
+<div class="p-header">
+  <h1>チェア別スタッフ配置表</h1>
+  <span class="p-date">${dateStr}</span>
+</div>
+<div class="p-staff-bar">出勤: ${staffHtml}</div>
+<div class="p-grid">${chairsHtml}</div>
+<div class="p-footer">
+  <span>計${tot}件 / うち「誰でも」${freeC}件 / 出勤${wStaff.length}名</span>
+  <span>${new Date().toLocaleString('ja-JP')}</span>
+</div>
+<div class="p-no-print" style="text-align:center;margin:12px;">
+  <button onclick="window.print()" style="padding:8px 24px;font-size:14px;cursor:pointer;">🖨 印刷 / PDF保存</button>
+</div>
+</body></html>`);
+  w.document.close();
 }
 
 function minToTime(m){
