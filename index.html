@@ -140,6 +140,9 @@ header{background:var(--ink);height:52px;padding:0 20px;display:flex;align-items
 .apname{font-weight:600;font-size:12px;line-height:1.3;}
 .aptx{font-size:10px;color:var(--ink3);margin-top:1px;}
 .aptx.free-label{color:var(--amber);font-weight:700;}  /* visual for "誰でも" */
+.treat-badge{font-size:8px;padding:1px 5px;border-radius:3px;font-weight:700;vertical-align:middle;margin-left:4px;}
+.tb-dh{background:var(--dh-bg);color:var(--dh-c);}
+.tb-dr{background:#fce7f3;color:#be185d;}
 .asel-wrap{display:flex;flex-direction:column;gap:3px;}
 
 /* assign select */
@@ -349,18 +352,27 @@ function isDrChair(chairName) {
 
 // チェア別スタッフ配置ルール
 // メンテ1-4: DHのみ
-// Dr.5,6,7: DA or DH
-// 特診室: メンテ/SC/ドック/SRP/口腔機能検査 → DH、その他(Dr処置) → DA
-// 新患/カウンセリング: DH or DA（内容次第）
-function getChairRoles(chairName, treatment) {
-  const t = (treatment||'').toLowerCase();
+// Dr.5,6,7: treat_typeで判定（DH処置→DH、Dr処置→DA）
+// 特診室: treat_typeで判定
+// 新患/カウンセリング: treat_typeで判定
+function getChairRoles(chairName, treatment, treatType) {
+  // メンテチェアは常にDHのみ
   if (/^メンテ/i.test(chairName)) return {needDh:true, needDa:false};
-  if (/Dr|dr/i.test(chairName)) return {needDh:true, needDa:true};
-  if (/特診/.test(chairName)) {
-    const dhTreat = /メンテ|SC|ドック|SRP|口腔機能|ｽｹｰﾘﾝｸﾞ|スケーリング|初リコ|P検|精検|SPT/i.test(treatment);
-    return dhTreat ? {needDh:true, needDa:false} : {needDh:false, needDa:true};
+
+  // treat_typeがAPIから来ている場合はそれを使う
+  if (treatType) {
+    if (treatType === 'DH') return {needDh:true, needDa:false};
+    if (treatType === 'Dr') return {needDh:false, needDa:true};
   }
-  // 新患・カウンセリングなど → DHベース
+
+  // treat_typeが無い場合はtreatment内容から推定
+  const dhTreat = /メンテ|SC|ドック|SRP|口腔機能|ｽｹｰﾘﾝｸﾞ|スケーリング|初リコ|リコ|P検|精検|SPT|フッ素|TBI|PMTC|歯周/i.test(treatment);
+  if (dhTreat) return {needDh:true, needDa:false};
+
+  // Dr.チェア/特診室でDH処置でなければDA
+  if (/Dr|dr/i.test(chairName) || /特診/.test(chairName)) return {needDh:false, needDa:true};
+
+  // その他（新患等）→ DH
   return {needDh:true, needDa:false};
 }
 
@@ -959,7 +971,7 @@ async function readImg() {
   "date": "日付文字列（元号表記でOK）",
   "chairs": [
     {
-      "name": "チェア名（メンテ1、メンテ２、Dr.5、Dr.６、特診室など。表の列名をそのまま使う）",
+      "name": "チェア名（メンテ１、メンテ２、Dr.5、Dr.６、特診室など。表の列名をそのまま使う）",
       "appointments": [
         {
           "time": "HH:MM",
@@ -967,13 +979,24 @@ async function readImg() {
           "treatment": "処置内容。担当欄に「衛生士誰でも」「誰でも」と書いてあればそのまま含める",
           "duration": 所要時間分（コマ数×15、不明なら30）,
           "is_free_slot": true/falseで「誰でも」「衛生士誰でも」等の場合はtrue,
-          "existing_staff": "DH〇〇やDH名前などの担当者名があれば名前のみ抽出（なければ空文字）"
+          "existing_staff": "DH〇〇やDH名前などの担当者名があれば名前のみ抽出（なければ空文字）",
+          "treat_type": "DH" or "Dr"（下記ルール参照）
         }
       ]
     }
   ]
 }
-注意:チェア列ごとに分ける。空コマは除外。時間は左端の時間軸を参照。「誰でも」はis_free_slotをtrueに。矯正・昼休みの時間帯は除外。`;
+
+■ treat_type判定ルール（重要）:
+- "DH": メンテ、SC、スケーリング、ドック、SRP、P検、精検、SPT、口腔機能検査、初リコ、リコール、フッ素、TBI、PMTC、歯周治療
+- "Dr": C処、根治、根充、抜髄、抜歯、EXT、形成、印象、セット、CAD/CAM、インプラント、義歯、デンチャー、咬合調整、外科、切開、ナイトガード、マウスピース、その他Dr処置
+- 迷ったら処置内容のキーワードで判断。メンテチェア(メンテ1-4)の予約は基本"DH"。
+
+■ チェア列の注意:
+- 必ずチェア列ごとに分けて出力（メンテ１、メンテ２、…Dr.5、Dr.6、Dr.7、特診室、新患、カウンセリング等）
+- 空コマは除外。時間は左端の時間軸を参照
+- 「誰でも」「衛生士誰でも」はis_free_slotをtrueに
+- 矯正・昼休みの時間帯は除外`;
 
   try {
     let parsed;
@@ -1011,14 +1034,17 @@ async function readImg() {
       ...ch,
       color: CHAIR_COLORS[i%CHAIR_COLORS.length],
       appointments: (ch.appointments||[]).map(a=>{
+        const roles = getChairRoles(ch.name, a.treatment, a.treat_type);
         const dhFromStaff = matchStaff(a.existing_staff,'Dh');
         const dhFromTreat = !dhFromStaff ? matchDhFromTreatment(a.treatment) : '';
+        const daFromStaff = matchStaff(a.existing_staff,'Da');
         return {
           ...a,
           id: Math.random().toString(36).slice(2,9),
           isFree: a.is_free_slot || isFreeSlot(a),
-          assignDh: dhFromStaff || dhFromTreat,
-          assignDa: matchStaff(a.existing_staff,'Da'),
+          // ロールに応じて正しい列に配置
+          assignDh: roles.needDh ? (dhFromStaff || dhFromTreat) : '',
+          assignDa: roles.needDa ? daFromStaff : '',
           assignTC: matchStaff(a.existing_staff,'TC'),
         };
       })
@@ -1114,7 +1140,7 @@ function autoAssign() {
     const apptRef = a._ch.appointments.find(x=>x.id===a.id);
     if (!apptRef) return;
 
-    const roles = getChairRoles(a._ch.name, a.treatment);
+    const roles = getChairRoles(a._ch.name, a.treatment, a.treat_type);
 
     if (apptRef.isFree) {
       // 「誰でも」→ 空きDHを配置
@@ -1176,7 +1202,7 @@ function autoAssign() {
   schedule.chairs.forEach(ch => {
     ch.appointments.forEach(a => {
       if (a.isFree) return;
-      const r = getChairRoles(ch.name, a.treatment);
+      const r = getChairRoles(ch.name, a.treatment, a.treat_type);
       if (r.needDa && !a.assignDa) daShortage.push(a);
     });
   });
@@ -1264,24 +1290,9 @@ function renderChairs() {
 
   grid.innerHTML = chairs.map(ch => {
     const appts = ch.appointments||[];
-    // チェアタイプ判定（ヘッダー表示用）
     const isMente = /^メンテ/i.test(ch.name);
-    const isDr = isDrChair(ch.name);
-    const isToku = /特診/.test(ch.name);
-    let hdrCols, hdrLabels;
-    if (isMente) {
-      hdrCols = '42px 1fr 90px';
-      hdrLabels = '<span>時間</span><span>患者</span><span class="hdh">DH</span>';
-    } else if (isToku) {
-      hdrCols = '42px 1fr 80px 80px';
-      hdrLabels = '<span>時間</span><span>患者</span><span class="hda">DA</span><span class="hdh">DH</span>';
-    } else if (isDr) {
-      hdrCols = '42px 1fr 80px 80px';
-      hdrLabels = '<span>時間</span><span>患者</span><span class="hda">DA</span><span class="hdh">DH</span>';
-    } else {
-      hdrCols = '42px 1fr 90px';
-      hdrLabels = '<span>時間</span><span>患者</span><span class="hdh">DH</span>';
-    }
+    const hdrCols = '42px 1fr 90px';
+    const hdrLabels = `<span>時間</span><span>患者</span><span class="${isMente?'hdh':'hda'}">${isMente?'DH':'担当'}</span>`;
     const rows = appts.length===0
       ? `<div style="padding:14px;text-align:center;color:var(--ink3);font-size:11px;">予約なし</div>`
       : `<div class="ahdr" style="grid-template-columns:${hdrCols};">${hdrLabels}</div>`
@@ -1299,7 +1310,7 @@ function renderRow(a, chairName) {
   const free = a.isFree;
   const startMin = toMin(a.time);
   const dur = a.duration||30;
-  const roles = getChairRoles(chairName, a.treatment);
+  const roles = getChairRoles(chairName, a.treatment, a.treat_type);
 
   const mkSel = (role, field, selClass) => {
     const cands = staff.filter(s=>s.active&&s.role===role);
@@ -1327,39 +1338,30 @@ function renderRow(a, chairName) {
   };
 
   const isMente = /^メンテ/i.test(chairName);
-  const isDr = /Dr|dr/i.test(chairName);
-  const isToku = /特診/.test(chairName);
-
-  let gridCols;
-  if (isMente) gridCols = '42px 1fr 90px';
-  else if (isToku || isDr) gridCols = '42px 1fr 80px 80px';
-  else gridCols = '42px 1fr 90px';
 
   const rowH = Math.max(dur/15, 2) * 28;
-  const bgColor = getStaffColor(a.assignDh);
+  const bgColor = getStaffColor(a.assignDh || a.assignDa);
 
-  // 特診室: 処置内容によってDA or DH列を出し分け
+  // 処置タイプに応じた配置列
+  // DH処置 → DHセレクタのみ、Dr処置 → DAセレクタのみ
   let staffCols = '';
-  if (isMente) {
-    staffCols = mkSel('Dh','assignDh','s-dh');
-  } else if (isToku) {
-    if (roles.needDa && !roles.needDh) {
-      staffCols = mkSel('Da','assignDa','s-da') + `<div></div>`;
-    } else if (roles.needDh && !roles.needDa) {
-      staffCols = `<div></div>` + mkSel('Dh','assignDh','s-dh');
-    } else {
-      staffCols = mkSel('Da','assignDa','s-da') + mkSel('Dh','assignDh','s-dh');
-    }
-  } else if (isDr) {
+  let gridCols = '42px 1fr 90px'; // デフォルト: 1配置列
+  if (roles.needDh && roles.needDa) {
+    gridCols = '42px 1fr 80px 80px';
     staffCols = mkSel('Da','assignDa','s-da') + mkSel('Dh','assignDh','s-dh');
+  } else if (roles.needDa) {
+    staffCols = mkSel('Da','assignDa','s-da');
   } else {
     staffCols = mkSel('Dh','assignDh','s-dh');
   }
 
+  // 処置タイプバッジ
+  const typeBadge = !isMente && a.treat_type ? `<span class="treat-badge ${a.treat_type==='DH'?'tb-dh':'tb-dr'}">${a.treat_type}</span>` : '';
+
   return `<div class="arow${free?' free-flag':''}" style="grid-template-columns:${gridCols};min-height:${rowH}px;${bgColor?'background:'+bgColor+';':''}">
     <span class="atm">${a.time||''}</span>
     <div class="apinfo">
-      <div class="apname">${a.patient||'—'}</div>
+      <div class="apname">${a.patient||'—'} ${typeBadge}</div>
       <div class="aptx${free?' free-label':''}">${free?'🔄 '+a.treatment:a.treatment||''}</div>
     </div>
     ${staffCols}
