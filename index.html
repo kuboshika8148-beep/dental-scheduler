@@ -317,9 +317,10 @@ const WORKING = new Set(['出勤','訪問','AM_MT','土曜出勤','第2土曜出
 const ASSIGN_ROLES = new Set(['Dh','Da','TC']);
 
 const RC = {
-  Dh:{ label:'歯科衛生士', short:'DH', color:'#1d4ed8', bg:'#dbeafe' },
-  Da:{ label:'歯科助手',   short:'DA', color:'#15803d', bg:'#dcfce7' },
-  TC:{ label:'TC',         short:'TC', color:'#0e7490', bg:'#cffafe' },
+  Dh:      { label:'歯科衛生士', short:'DH',    color:'#1d4ed8', bg:'#dbeafe' },
+  Da:      { label:'歯科助手',   short:'DA',    color:'#15803d', bg:'#dcfce7' },
+  'CS/DA': { label:'CS/DA',     short:'CS/DA', color:'#d97706', bg:'#fef9c3' },
+  TC:      { label:'TC',         short:'TC',    color:'#0e7490', bg:'#cffafe' },
 };
 const CHAIR_COLORS = ['#3b7dd8','#0b7c6e','#c45c15','#6e34a8','#b91c1c','#1e7e4e','#7c6400','#1a6e8a','#7c3a8a'];
 
@@ -1194,13 +1195,17 @@ function autoAssign() {
         }
       }
 
-      // DA配置（DA不足時は空きDHで補充）
+      // DA配置（優先順: DA → DH → CS/DA）
       if (roles.needDa) {
         if (!apptRef.assignDa) {
           let avail = getAvailableWithBreak('Da', startMin, dur, a.id);
           if (!avail.length) {
-            // DAが足りない → 空きDHを派遣
+            // DA不足 → 空きDHを派遣
             avail = getAvailableWithBreak('Dh', startMin, dur, a.id);
+          }
+          if (!avail.length) {
+            // DHも足りない → CS/DAを最後に投入
+            avail = getAvailableWithBreak('CS/DA', startMin, dur, a.id);
           }
           if (avail.length) {
             avail.sort((x,y)=>(load[x.id]||0)-(load[y.id]||0));
@@ -1342,11 +1347,14 @@ function renderRow(a, chairName) {
   const roles = getChairRoles(chairName, a.treatment, a.treat_type);
 
   const mkSel = (role, field, selClass) => {
-    const cands = staff.filter(s=>s.active&&s.role===role);
+    // DA枠にはDA+DH+CS/DAを全て表示（手動選択用）
+    const cands = field === 'assignDa'
+      ? staff.filter(s=>s.active&&(s.role==='Da'||s.role==='Dh'||s.role==='CS/DA'))
+      : staff.filter(s=>s.active&&s.role===role);
     const val = a[field];
     const setCls = val ? (free && field==='assignDh' ? 's-free' : selClass) : '';
 
-    const availNow = getAvailable(role, startMin, dur, a.id);
+    const availNow = cands.filter(s=>!isBusy(s.id,startMin,dur,a.id));
     let hint = '';
     if (cands.length === 0) hint = `<div class="avail-hint none">担当なし</div>`;
     else if (availNow.length === 0) hint = `<div class="avail-hint none">⚠ 全員対応中</div>`;
@@ -1357,8 +1365,10 @@ function renderRow(a, chairName) {
         <option value="">— 未配置</option>
         ${cands.map(s=>{
           const busy = isBusy(s.id,startMin,dur,a.id)&&s.id!==val;
+          const rc = RC[s.role]||{};
+          const roleTag = field==='assignDa'&&s.role!=='Da' ? `[${rc.short||s.role}] ` : '';
           return `<option value="${s.id}" ${val==s.id?'selected':''} ${busy?'style="color:#9ca3af"':''}>
-            ${s.name}${busy?' (対応中)':''}
+            ${roleTag}${s.name}${busy?' (対応中)':''}
           </option>`;
         }).join('')}
       </select>
