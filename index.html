@@ -1002,14 +1002,37 @@ async function readImg() {
     let parsed;
 
     if (pdfText) {
-      // PDFテキストをClaude APIに送信
-      toast('PDFをAIで解析中...', 'info');
-      // ページ単位で送信（トークン節約）
-      const compactText = pdfPages.map((t,i)=>`=== ページ${i+1} ===\n${t.replace(/\s+/g,' ').trim()}`).join('\n');
-      const contentArr = [{type:'text', text: compactText + '\n\n' + prompt}];
-      parsed = await callClaudeApi(contentArr);
+      // PDFをページごとに分割してAPI送信（タイムアウト防止）
+      const allChairs = [];
+      let pdfDate = '';
+      for (let pi = 0; pi < pdfPages.length; pi++) {
+        toast(`PDFをAIで解析中... (${pi+1}/${pdfPages.length}ページ)`, 'info');
+        const pageText = pdfPages[pi].replace(/\s+/g,' ').trim();
+        if (pageText.length < 20) continue; // 空ページスキップ
+        const contentArr = [{type:'text', text: pageText + '\n\n' + prompt}];
+        const pgResult = await callClaudeApi(contentArr);
+        if (pgResult?.date && !pdfDate) pdfDate = pgResult.date;
+        if (pgResult?.chairs) {
+          pgResult.chairs.forEach(ch => {
+            // 同名チェアがあればマージ
+            const existing = allChairs.find(c => c.name === ch.name);
+            if (existing) {
+              existing.appointments = [...(existing.appointments||[]), ...(ch.appointments||[])];
+            } else {
+              allChairs.push(ch);
+            }
+          });
+        }
+      }
+      parsed = { date: pdfDate, chairs: allChairs };
+      if (!parsed.chairs.length) {
+        toast('PDFから予約を抽出できませんでした', 'ng');
+        document.getElementById('rdBtn').disabled=false;
+        document.getElementById('ld').style.display='none';
+        return;
+      }
       // PDFの日付から自動でシフト読込
-      if (parsed?.date) {
+      if (parsed.date) {
         const dm = parsed.date.match(/令和(\d+)年(\d+)月(\d+)日/);
         if (dm) {
           const isoDate = `${2018+parseInt(dm[1])}-${dm[2].padStart(2,'0')}-${dm[3].padStart(2,'0')}`;
