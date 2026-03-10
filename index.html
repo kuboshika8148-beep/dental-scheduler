@@ -676,6 +676,13 @@ async function readImg() {
       })
     });
     const data = await res.json();
+    if(!res.ok){
+      console.error('API error:', res.status, data);
+      toast(`API エラー: ${data.error?.message||data.error||res.status}`,'ng');
+      document.getElementById('rdBtn').disabled=false;
+      document.getElementById('ld').style.display='none';
+      return;
+    }
     const text = (data.content||[]).map(c=>c.text||'').join('');
     const parsed = JSON.parse(text.replace(/```json|```/g,'').trim());
 
