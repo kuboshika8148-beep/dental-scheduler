@@ -117,7 +117,8 @@ header{background:var(--ink);height:52px;padding:0 20px;display:flex;align-items
 
 /* ── CHAIR GRID ── */
 .cgrid{display:grid;gap:9px;}
-.ccard{background:#fff;border:1px solid var(--border);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden;}
+.ccard{background:#fff;border:1px solid var(--border);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden;transition:border-color .15s,transform .15s;}
+.ccard.drag-over{border-color:var(--teal);border-width:2px;transform:scale(1.02);}
 .chead{padding:7px 12px;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);background:var(--bg);}
 .cname{display:flex;align-items:center;gap:5px;}
 .cdot{width:8px;height:8px;border-radius:50%;}
@@ -1311,7 +1312,7 @@ function renderChairs() {
   // チェアごとに1列ずつ表示（最大5列）
   grid.style.gridTemplateColumns = `repeat(${Math.min(chairs.length,5)},1fr)`;
 
-  grid.innerHTML = chairs.map(ch => {
+  grid.innerHTML = chairs.map((ch,ci) => {
     const appts = ch.appointments||[];
     const isMente = /^メンテ/i.test(ch.name);
     const hdrCols = '42px 1fr 90px';
@@ -1320,13 +1321,38 @@ function renderChairs() {
       ? `<div style="padding:14px;text-align:center;color:var(--ink3);font-size:11px;">予約なし</div>`
       : `<div class="ahdr" style="grid-template-columns:${hdrCols};">${hdrLabels}</div>`
         + appts.map(a => renderRow(a, ch.name)).join('');
-    return `<div class="ccard">
-      <div class="chead">
+    return `<div class="ccard" draggable="true" data-cidx="${ci}">
+      <div class="chead" style="cursor:grab;">
         <div class="cname"><div class="cdot" style="background:${ch.color}"></div><span>${ch.name}</span></div>
         <span class="cct">${appts.length}件</span>
       </div>${rows}
     </div>`;
   }).join('');
+
+  // ドラッグ＆ドロップでチェア並び替え
+  grid.querySelectorAll('.ccard').forEach(card => {
+    card.addEventListener('dragstart', e => {
+      e.dataTransfer.setData('text/plain', card.dataset.cidx);
+      card.style.opacity = '0.4';
+    });
+    card.addEventListener('dragend', () => { card.style.opacity = '1'; });
+    card.addEventListener('dragover', e => {
+      e.preventDefault();
+      card.classList.add('drag-over');
+    });
+    card.addEventListener('dragleave', () => { card.classList.remove('drag-over'); });
+    card.addEventListener('drop', e => {
+      e.preventDefault();
+      card.classList.remove('drag-over');
+      const fromIdx = parseInt(e.dataTransfer.getData('text/plain'));
+      const toIdx = parseInt(card.dataset.cidx);
+      if (fromIdx !== toIdx && !isNaN(fromIdx) && !isNaN(toIdx)) {
+        const moved = schedule.chairs.splice(fromIdx, 1)[0];
+        schedule.chairs.splice(toIdx, 0, moved);
+        renderChairs();
+      }
+    });
+  });
 }
 
 function renderRow(a, chairName) {
