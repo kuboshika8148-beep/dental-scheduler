@@ -587,8 +587,9 @@ function onFile(e) {
     const r = new FileReader();
     r.onload = ev => {
       // PDF.jsを使ってテキスト抽出
-      pdfBuffer = ev.target.result.slice(0);
-      extractPdfText(ev.target.result).then(text => {
+      const rawBuf = ev.target.result;
+      pdfBuffer = rawBuf.slice(0);
+      extractPdfText(rawBuf.slice(0)).then(text => {
         pdfText = text;
         imgB64 = null; imgMime = null;
         p.style.display = 'none';
@@ -620,7 +621,7 @@ function onFile(e) {
 async function extractPdfText(arrayBuffer) {
   // PDF.jsでテキスト抽出（ページ別も保存）
   const pdfjsLib = await loadPdfJs();
-  const pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
+  const pdf = await pdfjsLib.getDocument({data: new Uint8Array(arrayBuffer)}).promise;
   let fullText = '';
   pdfPages = [];
   for (let i = 1; i <= pdf.numPages; i++) {
@@ -645,7 +646,7 @@ async function extractPdfText(arrayBuffer) {
 // ── ローカルPDFパーサー（座標ベース、API不要）──
 async function parsePdfLocal(arrayBuffer) {
   const pdfjsLib = await loadPdfJs();
-  const pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
+  const pdf = await pdfjsLib.getDocument({data: new Uint8Array(arrayBuffer)}).promise;
   let allItems = [];
   for (let p = 1; p <= pdf.numPages; p++) {
     const page = await pdf.getPage(p);
