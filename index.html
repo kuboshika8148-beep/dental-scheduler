@@ -676,6 +676,8 @@ async function readImg() {
       })
     });
     const data = await res.json();
+    console.log('API response status:', res.status);
+    console.log('API response data:', JSON.stringify(data).substring(0,500));
     if(!res.ok){
       console.error('API error:', res.status, data);
       toast(`API エラー: ${data.error?.message||data.error||res.status}`,'ng');
@@ -684,7 +686,23 @@ async function readImg() {
       return;
     }
     const text = (data.content||[]).map(c=>c.text||'').join('');
-    const parsed = JSON.parse(text.replace(/```json|```/g,'').trim());
+    console.log('Claude response text (first 500):', text.substring(0,500));
+    if(!text){
+      toast('AIからの応答が空でした','ng');
+      document.getElementById('rdBtn').disabled=false;
+      document.getElementById('ld').style.display='none';
+      return;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(text.replace(/```json|```/g,'').trim());
+    } catch(pe) {
+      console.error('JSON parse error:', pe, 'Raw text:', text.substring(0,1000));
+      toast('AIの応答をJSON解析できませんでした。コンソールを確認してください','ng');
+      document.getElementById('rdBtn').disabled=false;
+      document.getElementById('ld').style.display='none';
+      return;
+    }
 
     parsed.chairs = (parsed.chairs||[]).map((ch,i)=>({
       ...ch,
