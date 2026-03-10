@@ -587,7 +587,7 @@ function onFile(e) {
     const r = new FileReader();
     r.onload = ev => {
       // PDF.jsを使ってテキスト抽出
-      pdfBuffer = ev.target.result;
+      pdfBuffer = ev.target.result.slice(0);
       extractPdfText(ev.target.result).then(text => {
         pdfText = text;
         imgB64 = null; imgMime = null;
