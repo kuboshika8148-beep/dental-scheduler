@@ -992,14 +992,14 @@ async function readImg() {
   document.getElementById('rdBtn').disabled=true;
   document.getElementById('ld').style.display='flex';
 
-  const prompt=`歯科アポイント表→JSON変換。{から始めて出力。説明文不要。treatmentは短く要約。
-{"date":"日付","chairs":[{"name":"チェア名","appointments":[{"time":"HH:MM","patient":"患者名","treatment":"短い処置内容","duration":30,"is_free_slot":false,"existing_staff":"担当DH名(なければ空)","treat_type":"DH or Dr"}]}]}
+  const prompt=`歯科アポイント表→JSON変換。{から始めて出力。説明文不要。
+{"date":"日付","chairs":[{"name":"チェア名","appointments":[{"time":"HH:MM","patient":"患者名","treatment":"処置内容(短く)","duration":30,"is_free_slot":false,"existing_staff":"担当者名","treat_type":"DH"}]}]}
 ルール:
 - チェア列ごとに分ける(メンテ１〜４,Dr.5〜7,特診室,新患等)
-- treat_type: メンテ/SC/SRP/ドック/P検/SPT/リコ→"DH", C処/根治/抜歯/印象/セット/CAD等→"Dr"
-- 「誰でも」→is_free_slot:true
+- treat_type: メンテ/SC/SRP/ドック/P検/SPT/リコ/フッ素→"DH", C処/根治/抜歯/印象/セット/CAD/形成→"Dr"
+- 「誰でも」「衛生士誰でも」→is_free_slot:true
 - 空コマ・矯正・昼休み除外
-- existing_staff: "DH西本"→"西本"のように名前のみ`;
+- ★existing_staffが最重要★: 各予約欄にDH西本、DH濱田、DH井上、DH橋村、DH堀川等の担当者記載がある。必ず名前部分のみ抽出(例:"DH西本"→"西本","DH 濱田"→"濱田")。記載がなければ空文字`;
 
   try {
     let parsed;
@@ -1061,16 +1061,22 @@ async function readImg() {
       color: CHAIR_COLORS[i%CHAIR_COLORS.length],
       appointments: (ch.appointments||[]).map(a=>{
         const roles = getChairRoles(ch.name, a.treatment, a.treat_type);
-        const dhFromStaff = matchStaff(a.existing_staff,'Dh');
-        const dhFromTreat = !dhFromStaff ? matchDhFromTreatment(a.treatment) : '';
-        const daFromStaff = matchStaff(a.existing_staff,'Da');
+        // existing_staffとtreatmentからスタッフ名を探す（ロール問わず）
+        const staffFromName = matchStaffAny(a.existing_staff);
+        const staffFromTreat = !staffFromName ? matchStaffFromTreatment(a.treatment) : null;
+        const found = staffFromName || staffFromTreat;
+        let assignDh = '', assignDa = '';
+        if (found) {
+          // 見つかったスタッフのロールに応じて配置
+          if (found.role === 'Dh') assignDh = found.id;
+          else if (found.role === 'Da' || found.role === 'CS/DA') assignDa = found.id;
+        }
         return {
           ...a,
           id: Math.random().toString(36).slice(2,9),
           isFree: a.is_free_slot || isFreeSlot(a),
-          // ロールに応じて正しい列に配置
-          assignDh: roles.needDh ? (dhFromStaff || dhFromTreat) : '',
-          assignDa: roles.needDa ? daFromStaff : '',
+          assignDh,
+          assignDa,
           assignTC: matchStaff(a.existing_staff,'TC'),
         };
       })
@@ -1099,16 +1105,25 @@ function matchStaff(name, role) {
   return s ? s.id : '';
 }
 
-// treatmentテキストからDH名を抽出してマッチング
-function matchDhFromTreatment(treatment) {
-  if(!treatment) return '';
+// ロール問わずスタッフ名でマッチ（existing_staff用）
+function matchStaffAny(name) {
+  if(!name) return null;
+  const s = staff.filter(x=>x.active)
+    .find(x=>name.includes(x.name.split(/\s/)[0])||x.name.split(/\s/)[0].includes(name));
+  return s || null;
+}
+
+// treatmentテキストからDH/スタッフ名を抽出してマッチ
+function matchStaffFromTreatment(treatment) {
+  if(!treatment) return null;
   // "DH宮下" "DH 西本" "ＤＨ福山" などのパターンを検出
   const m = treatment.match(/[DＤ][HＨ]\s*([^\s,、()（）]+)/i);
-  if(!m) return '';
-  const name = m[1];
-  const s = staff.filter(x=>x.active&&x.role==='Dh')
-    .find(x=>name.includes(x.name.split(/\s/)[0])||x.name.split(/\s/)[0].includes(name));
-  return s ? s.id : '';
+  if(m) {
+    const s = staff.filter(x=>x.active)
+      .find(x=>m[1].includes(x.name.split(/\s/)[0])||x.name.split(/\s/)[0].includes(m[1]));
+    if(s) return s;
+  }
+  return null;
 }
 
 // ══════════════════════════════════════════════
