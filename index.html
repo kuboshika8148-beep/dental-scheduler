@@ -940,6 +940,7 @@ async function callClaudeApi(contentArr) {
     method:'POST', headers:{'Content-Type':'application/json'},
     body:JSON.stringify({
       model:'claude-sonnet-4-6', max_tokens:16000,
+      system:'JSONのみを出力してください。説明文やコードブロック記号は一切不要です。{から始めてください。',
       messages:[{role:'user',content:contentArr}]
     })
   });
@@ -953,7 +954,24 @@ async function callClaudeApi(contentArr) {
   if(!text) throw new Error('AIからの応答が空でした');
   let parsed;
   try {
-    parsed = JSON.parse(text.replace(/```json|```/g,'').trim());
+    // JSON部分のみ抽出（前後の思考テキストを除去）
+    let jsonStr = text.replace(/```json|```/g,'').trim();
+    const jsonStart = jsonStr.indexOf('{');
+    if (jsonStart > 0) jsonStr = jsonStr.substring(jsonStart);
+    // 途中で切れている場合: 末尾を補完
+    if (!jsonStr.endsWith('}')) {
+      // 最後の完全なオブジェクト閉じを探す
+      const lastBrace = jsonStr.lastIndexOf('}');
+      if (lastBrace > 0) {
+        jsonStr = jsonStr.substring(0, lastBrace + 1);
+        // chairs配列とルートが閉じてなければ補完
+        const opens = (jsonStr.match(/\[/g)||[]).length;
+        const closes = (jsonStr.match(/\]/g)||[]).length;
+        for (let i = 0; i < opens - closes; i++) jsonStr += ']';
+        if (!jsonStr.endsWith('}')) jsonStr += '}';
+      }
+    }
+    parsed = JSON.parse(jsonStr);
   } catch(pe) {
     console.error('JSON parse error. Raw text:', text.substring(0,2000));
     throw new Error('AIの応答をJSON解析できませんでした');
