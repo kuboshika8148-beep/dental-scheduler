@@ -1072,34 +1072,63 @@ async function readImg() {
     // デバッグ: マッチング前のスタッフ一覧
     console.log('[Staff Match] 出勤スタッフ:', staff.filter(s=>s.active).map(s=>`${s.name}(${s.role},id=${s.id})`));
 
+    // PDFの担当名からスタッフを自動登録（見つからなければ仮登録）
+    function ensureStaff(name, defaultRole) {
+      if (!name) return null;
+      // 既存スタッフから検索
+      const found = staff.find(s => s.active && (
+        name.includes(s.name.split(/\s/)[0]) || s.name.split(/\s/)[0].includes(name)
+      ));
+      if (found) return found;
+      // treatmentからも検索
+      const fromTreat = staff.find(s => s.active && s.name.includes(name));
+      if (fromTreat) return fromTreat;
+      // 見つからない → 仮登録
+      manualId++;
+      const newS = { id: manualId, name: name, role: defaultRole, active: true, source: 'pdf' };
+      staff.push(newS);
+      console.log(`[Staff] PDF担当 "${name}" を${defaultRole}として仮登録 (id=${manualId})`);
+      return newS;
+    }
+
     parsed.chairs = (parsed.chairs||[]).map((ch,i)=>({
       ...ch,
       color: CHAIR_COLORS[i%CHAIR_COLORS.length],
       appointments: (ch.appointments||[]).map(a=>{
         const roles = getChairRoles(ch.name, a.treatment, a.treat_type);
-        // existing_staffとtreatmentからスタッフ名を探す（ロール問わず）
-        const staffFromName = matchStaffAny(a.existing_staff);
-        const staffFromTreat = !staffFromName ? matchStaffFromTreatment(a.treatment) : null;
-        const found = staffFromName || staffFromTreat;
         let assignDh = '', assignDa = '';
-        if (found) {
-          if (found.role === 'Dh') assignDh = found.id;
-          else if (found.role === 'Da' || found.role === 'CS/DA') assignDa = found.id;
+
+        // existing_staffがあれば必ず配置
+        const staffName = a.existing_staff || '';
+        if (staffName) {
+          // 担当名のデフォルトロール推定
+          const guessRole = roles.needDh ? 'Dh' : 'Da';
+          const s = ensureStaff(staffName, guessRole);
+          if (s) {
+            if (s.role === 'Dh') assignDh = s.id;
+            else assignDa = s.id;
+          }
         }
-        // デバッグ: マッチ結果
-        if (a.existing_staff) {
-          console.log(`[Staff Match] "${a.existing_staff}" → ${found ? found.name+'('+found.role+')' : '❌未マッチ'} | treatment="${(a.treatment||'').substring(0,30)}"`);
+        // treatmentにDH名があればそちらも
+        if (!assignDh && !assignDa) {
+          const m = (a.treatment||'').match(/[DＤ][HＨ]\s*([^\s,、()（）]+)/i);
+          if (m) {
+            const s = ensureStaff(m[1], 'Dh');
+            if (s) assignDh = s.id;
+          }
         }
+
         return {
           ...a,
           id: Math.random().toString(36).slice(2,9),
           isFree: a.is_free_slot || isFreeSlot(a),
           assignDh,
           assignDa,
-          assignTC: matchStaff(a.existing_staff,'TC'),
+          assignTC: '',
         };
       })
     }));
+    renderAll();
 
     schedule = parsed;
     if(parsed.date) document.getElementById('subTtl').textContent = parsed.date;
