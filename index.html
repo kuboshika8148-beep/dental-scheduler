@@ -940,7 +940,7 @@ async function callClaudeApi(contentArr) {
     method:'POST', headers:{'Content-Type':'application/json'},
     body:JSON.stringify({
       model:'claude-sonnet-4-6', max_tokens:16000,
-      system:'JSONのみを出力してください。説明文やコードブロック記号は一切不要です。{から始めてください。',
+      system:'あなたはJSON出力専用のパーサーです。思考過程や説明文は一切出力せず、{から始まるJSONのみを返してください。コードブロック記号も不要。',
       messages:[{role:'user',content:contentArr}]
     })
   });
@@ -953,28 +953,36 @@ async function callClaudeApi(contentArr) {
   const text = (data.content||[]).map(c=>c.text||'').join('');
   if(!text) throw new Error('AIからの応答が空でした');
   let parsed;
-  try {
-    // JSON部分のみ抽出（前後の思考テキストを除去）
-    let jsonStr = text.replace(/```json|```/g,'').trim();
-    const jsonStart = jsonStr.indexOf('{');
-    if (jsonStart > 0) jsonStr = jsonStr.substring(jsonStart);
-    // 途中で切れている場合: 末尾を補完
-    if (!jsonStr.endsWith('}')) {
-      // 最後の完全なオブジェクト閉じを探す
-      const lastBrace = jsonStr.lastIndexOf('}');
-      if (lastBrace > 0) {
-        jsonStr = jsonStr.substring(0, lastBrace + 1);
-        // chairs配列とルートが閉じてなければ補完
-        const opens = (jsonStr.match(/\[/g)||[]).length;
-        const closes = (jsonStr.match(/\]/g)||[]).length;
-        for (let i = 0; i < opens - closes; i++) jsonStr += ']';
-        if (!jsonStr.endsWith('}')) jsonStr += '}';
+  // JSON部分を抽出（前後の思考テキストを除去）
+  let jsonStr = text.replace(/```json|```/g,'').trim();
+  const jsonStart = jsonStr.indexOf('{');
+  if (jsonStart > 0) jsonStr = jsonStr.substring(jsonStart);
+
+  // まずそのままパース試行
+  try { parsed = JSON.parse(jsonStr); } catch(e1) {
+    // 途中切れの場合: 最後の完全なappointmentオブジェクト末尾 "}]}" を探して切る
+    // パターン: "treat_type":"DH"} or "treat_type":"Dr"} の後の ]} で切る
+    const safeEnd = jsonStr.lastIndexOf('"treat_type"');
+    if (safeEnd > 0) {
+      // treat_typeの値の閉じ}まで探す
+      let pos = jsonStr.indexOf('}', safeEnd);
+      if (pos > 0) {
+        jsonStr = jsonStr.substring(0, pos + 1);
+        jsonStr += ']}]}'; // appointments配列 + chair + chairs配列 + root閉じ
+        try { parsed = JSON.parse(jsonStr); } catch(e2) {
+          // さらにフォールバック: 最後の "}]}" を探す
+          const lastChairEnd = jsonStr.lastIndexOf('}]}');
+          if (lastChairEnd > 0) {
+            jsonStr = jsonStr.substring(0, lastChairEnd + 3) + ']}';
+            try { parsed = JSON.parse(jsonStr); } catch(e3) {}
+          }
+        }
       }
     }
-    parsed = JSON.parse(jsonStr);
-  } catch(pe) {
-    console.error('JSON parse error. Raw text:', text.substring(0,2000));
-    throw new Error('AIの応答をJSON解析できませんでした');
+    if (!parsed) {
+      console.error('JSON parse error. Raw text:', text.substring(0, 2000));
+      throw new Error('AIの応答をJSON解析できませんでした（途中で切れている可能性）');
+    }
   }
   return parsed;
 }
@@ -984,39 +992,14 @@ async function readImg() {
   document.getElementById('rdBtn').disabled=true;
   document.getElementById('ld').style.display='flex';
 
-  const prompt=`これは歯科医院のチェア別予約一覧表（アポイント表）のデータです。
-全ての予約情報を読み取り、以下のJSON形式のみで返してください。コードブロック不要。
-
-{
-  "date": "日付文字列（元号表記でOK）",
-  "chairs": [
-    {
-      "name": "チェア名（メンテ１、メンテ２、Dr.5、Dr.６、特診室など。表の列名をそのまま使う）",
-      "appointments": [
-        {
-          "time": "HH:MM",
-          "patient": "患者名",
-          "treatment": "処置内容。担当欄に「衛生士誰でも」「誰でも」と書いてあればそのまま含める",
-          "duration": 所要時間分（コマ数×15、不明なら30）,
-          "is_free_slot": true/falseで「誰でも」「衛生士誰でも」等の場合はtrue,
-          "existing_staff": "DH〇〇やDH名前などの担当者名があれば名前のみ抽出（なければ空文字）",
-          "treat_type": "DH" or "Dr"（下記ルール参照）
-        }
-      ]
-    }
-  ]
-}
-
-■ treat_type判定ルール（重要）:
-- "DH": メンテ、SC、スケーリング、ドック、SRP、P検、精検、SPT、口腔機能検査、初リコ、リコール、フッ素、TBI、PMTC、歯周治療
-- "Dr": C処、根治、根充、抜髄、抜歯、EXT、形成、印象、セット、CAD/CAM、インプラント、義歯、デンチャー、咬合調整、外科、切開、ナイトガード、マウスピース、その他Dr処置
-- 迷ったら処置内容のキーワードで判断。メンテチェア(メンテ1-4)の予約は基本"DH"。
-
-■ チェア列の注意:
-- 必ずチェア列ごとに分けて出力（メンテ１、メンテ２、…Dr.5、Dr.6、Dr.7、特診室、新患、カウンセリング等）
-- 空コマは除外。時間は左端の時間軸を参照
-- 「誰でも」「衛生士誰でも」はis_free_slotをtrueに
-- 矯正・昼休みの時間帯は除外`;
+  const prompt=`歯科アポイント表→JSON変換。{から始めて出力。説明文不要。treatmentは短く要約。
+{"date":"日付","chairs":[{"name":"チェア名","appointments":[{"time":"HH:MM","patient":"患者名","treatment":"短い処置内容","duration":30,"is_free_slot":false,"existing_staff":"担当DH名(なければ空)","treat_type":"DH or Dr"}]}]}
+ルール:
+- チェア列ごとに分ける(メンテ１〜４,Dr.5〜7,特診室,新患等)
+- treat_type: メンテ/SC/SRP/ドック/P検/SPT/リコ→"DH", C処/根治/抜歯/印象/セット/CAD等→"Dr"
+- 「誰でも」→is_free_slot:true
+- 空コマ・矯正・昼休み除外
+- existing_staff: "DH西本"→"西本"のように名前のみ`;
 
   try {
     let parsed;
