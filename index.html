@@ -1042,8 +1042,20 @@ async function readImg() {
           const isoDate = `${2018+parseInt(dm[1])}-${dm[2].padStart(2,'0')}-${dm[3].padStart(2,'0')}`;
           document.getElementById('datePick').value = isoDate;
           toast('シフトデータを自動取得中...', 'info');
-          await loadShifts();
+          try { await loadShifts(); } catch(e) { console.warn('loadShifts failed:', e); }
         }
+      }
+      // スタッフが空の場合: Supabaseから全スタッフを取得（シフト関係なく）
+      if (!staff.filter(s=>s.active).length) {
+        console.log('[Fallback] シフトデータなし → 全スタッフ取得');
+        try {
+          const allSt = await sbQuery('staff', {select:'id,name,role,active', active:'eq.true', order:'id'});
+          if (allSt?.length) {
+            staff = allSt.filter(s=>ASSIGN_ROLES.has(s.role)).map(s=>({id:s.id, name:s.name, role:s.role, active:true, source:'fallback'}));
+            toast(`全スタッフ${staff.length}名を取得（シフト未確定）`,'info');
+            renderAll();
+          }
+        } catch(e) { console.warn('Fallback staff load failed:', e); }
       }
     } else if (imgB64) {
       // 画像はClaude APIで処理
