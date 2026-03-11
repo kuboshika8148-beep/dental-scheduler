@@ -314,7 +314,7 @@ const SB_URL = "https://gvxdmldpimjvicllrhll.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd2eGRtbGRwaW1qdmljbGxyaGxsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0MTE2OTUsImV4cCI6MjA4Nzk4NzY5NX0.6EnrECgVy79VUNsbRQGL_shmhaWnPAq0BL2uYz6ilF0";
 
 const WORKING = new Set(['出勤','訪問','AM_MT','土曜出勤','第2土曜出勤','矯正当番_土','矯正当番_木','午前半休','午後半休']);
-const ASSIGN_ROLES = new Set(['Dh','Da','TC']);
+const ASSIGN_ROLES = new Set(['Dh','Da','CS/DA','TC']);
 
 const RC = {
   Dh:      { label:'歯科衛生士', short:'DH',    color:'#1d4ed8', bg:'#dbeafe' },
@@ -529,6 +529,7 @@ async function loadShifts() {
     // シフトデータをマップ化
     const shiftMap = {};
     (shiftRows||[]).forEach(r => { shiftMap[r.staff_id] = r.shift_type; });
+    console.log('[loadShifts] allStaff:', allStaff?.length, 'shiftRows:', shiftRows?.length, 'shiftMap:', JSON.stringify(shiftMap).substring(0,200));
 
     const MANUAL_ONLY_IDS = new Set([21]); // 嶋津さんは手動追加のみ
     const working = allStaff.filter(s => s.active && ASSIGN_ROLES.has(s.role) && !MANUAL_ONLY_IDS.has(s.id) && WORKING.has(shiftMap[s.id]));
@@ -557,7 +558,7 @@ function renderStaffPanel(working, offList) {
   working.forEach(s => { if(!byRole[s.role]) byRole[s.role]=[]; byRole[s.role].push(s); });
 
   let html = '';
-  ['Dh','Da','TC'].forEach(role => {
+  ['Dh','Da','CS/DA','TC'].forEach(role => {
     const mem = byRole[role]||[];
     if (!mem.length) return;
     const cfg = RC[role];
