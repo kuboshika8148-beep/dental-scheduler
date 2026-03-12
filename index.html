@@ -858,13 +858,14 @@ async function parsePdfLocal(uint8arr) {
 
       // スタッフ抽出
       let existingStaff = '';
+      let existingDr = '';
       let isFree = false;
       grp.forEach(s => {
         const ss = s.trim();
         if (ss.match(/^DH[^\s]{1,5}$/) && !ss.includes('誰でも')) {
           existingStaff = ss.replace(/^DH/,'');
-        } else if (ss.match(/^Dr[^\s\.]{1,5}$/)) {
-          existingStaff = ss;
+        } else if (ss === '院長' || ss.match(/^Dr[^\s\.]{1,5}$/) || ss.match(/^[DＤ][rｒ][^\s\.]{1,5}$/)) {
+          existingDr = ss === '院長' ? '院長' : ss.replace(/^[DＤ][rｒ]/,'');
         }
         if (ss.includes('誰でも')) isFree = true;
       });
@@ -893,6 +894,7 @@ async function parsePdfLocal(uint8arr) {
           duration: 30,
           is_free_slot: isFree,
           existing_staff: existingStaff,
+          existing_dr: existingDr,
         });
       }
     });
@@ -998,14 +1000,15 @@ async function readImg() {
   document.getElementById('ld').style.display='flex';
 
   const prompt=`歯科アポイント表→JSON変換。{から始めて出力。説明文不要。
-{"date":"日付","chairs":[{"name":"チェア名","appointments":[{"time":"HH:MM","patient":"患者名","treatment":"処置内容(短く)","duration":30,"is_free_slot":false,"existing_staff":"担当者名","treat_type":"DH"}]}]}
+{"date":"日付","chairs":[{"name":"チェア名","appointments":[{"time":"HH:MM","patient":"患者名","treatment":"処置内容(短く)","duration":30,"is_free_slot":false,"existing_staff":"担当者名","existing_dr":"担当Dr名","treat_type":"DH"}]}]}
 ルール:
 - チェア列ごとに分ける(メンテ１〜４,Dr.5〜7,特診室,新患等)
 - ★時間は正確に★: 左端の時間軸から正確に読み取る。"9:00","9:30","10:00"等の24時間表記(HH:MM)。午前は08:45〜12:00、午後は14:00〜18:30が典型。時間を推測せず、表に記載された時刻をそのまま使うこと
 - treat_type: メンテ/SC/SRP/ドック/P検/SPT/リコ/フッ素→"DH", C処/根治/抜歯/印象/セット/CAD/形成→"Dr"
 - 「誰でも」「衛生士誰でも」→is_free_slot:true
 - 空コマ・矯正・昼休み除外
-- ★existing_staffが最重要★: 各予約欄にDH西本、DH濱田、DH井上、DH橋村、DH堀川等の担当者記載がある。必ず名前部分のみ抽出(例:"DH西本"→"西本","DH 濱田"→"濱田")。記載がなければ空文字`;
+- ★existing_staffが最重要★: 各予約欄にDH西本、DH濱田、DH井上、DH橋村、DH堀川等の担当者記載がある。必ず名前部分のみ抽出(例:"DH西本"→"西本","DH 濱田"→"濱田")。記載がなければ空文字
+- ★existing_drも重要★: 「院長」「Dr岡崎」等のDr担当記載があれば抽出。"院長"→"院長","Dr岡崎"→"岡崎"。記載がなければ空文字`;
 
   try {
     let parsed;
@@ -1101,12 +1104,27 @@ async function readImg() {
       color: CHAIR_COLORS[i%CHAIR_COLORS.length],
       appointments: (ch.appointments||[]).map(a=>{
         const roles = getChairRoles(ch.name, a.treatment, a.treat_type);
-        let assignDh = '', assignDa = '';
+        let assignDh = '', assignDa = '', assignDr = '';
+        const isDrC = isDrChair(ch.name);
 
-        // existing_staffがあれば必ず配置
+        // Dr抽出: existing_drまたはtreatmentから院長/Dr岡崎等を検出
+        let drName = a.existing_dr || '';
+        if (!drName) {
+          const drM = (a.treatment||'').match(/院長|[DＤ][rｒ]\s*([^\s,、()（）\.]+)/i);
+          if (drM) drName = drM[0] === '院長' ? '院長' : (drM[1] || drM[0].replace(/^[DＤ][rｒ]\s*/,''));
+        }
+        // DrチェアでDr名があればDrとして配置
+        if (isDrC && drName) {
+          const drStaff = ensureStaff(drName, 'Dr');
+          if (drStaff) {
+            drStaff.role = 'Dr'; // 確実にDrロールに
+            assignDr = drStaff.id;
+          }
+        }
+
+        // existing_staffがあれば必ず配置（DH/DA）
         const staffName = a.existing_staff || '';
         if (staffName) {
-          // 担当名のデフォルトロール推定
           const guessRole = roles.needDh ? 'Dh' : 'Da';
           const s = ensureStaff(staffName, guessRole);
           if (s) {
@@ -1129,7 +1147,7 @@ async function readImg() {
           isFree: a.is_free_slot || isFreeSlot(a),
           assignDh,
           assignDa,
-          assignDr: '',
+          assignDr,
           assignTC: '',
         };
       }).sort((a,b)=>toMin(a.time)-toMin(b.time))
@@ -1280,19 +1298,34 @@ function autoAssign() {
       }
 
       // DA配置（優先順: DA → DH → CS/DA）
-      if (roles.needDa) {
+      // 岡崎Dr時は谷を優先配置
+      if (roles.needDa || (isDrC && !apptRef.assignDa)) {
         if (!apptRef.assignDa) {
           let avail = getAvailableWithBreak('Da', startMin, dur, a.id);
           if (!avail.length) {
-            // DA不足 → 空きDHを派遣
             avail = getAvailableWithBreak('Dh', startMin, dur, a.id);
           }
           if (!avail.length) {
-            // DHも足りない → CS/DAを最後に投入
             avail = getAvailableWithBreak('CS/DA', startMin, dur, a.id);
+          }
+          // 岡崎がDrの場合、谷を優先
+          if (avail.length && apptRef.assignDr) {
+            const drStaff = staff.find(s=>s.id===apptRef.assignDr);
+            if (drStaff && (drStaff.name.includes('岡崎') || drStaff.name.includes('岡﨑'))) {
+              const tani = avail.find(s=>s.name.includes('谷'));
+              if (tani) avail = [tani, ...avail.filter(s=>s.id!==tani.id)];
+            }
           }
           if (avail.length) {
             avail.sort((x,y)=>(load[x.id]||0)-(load[y.id]||0));
+            // 岡崎Dr時の谷優先: 谷が空いていれば先頭に
+            if (apptRef.assignDr) {
+              const drStaff = staff.find(s=>s.id===apptRef.assignDr);
+              if (drStaff && (drStaff.name.includes('岡崎') || drStaff.name.includes('岡﨑'))) {
+                const taniIdx = avail.findIndex(s=>s.name.includes('谷'));
+                if (taniIdx > 0) { const t = avail.splice(taniIdx,1)[0]; avail.unshift(t); }
+              }
+            }
             const s = avail[0];
             apptRef.assignDa = s.id;
             load[s.id] = (load[s.id]||0) + dur;
