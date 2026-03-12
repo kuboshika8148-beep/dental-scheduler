@@ -1246,6 +1246,10 @@ function autoAssign() {
       .filter(s => !isOnBreak(s.id, startMin, dur));
   }
 
+  console.log('[AutoAssign] スタッフ一覧:', staff.filter(s=>s.active).map(s=>`${s.name}(${s.role},id=${s.id})`));
+  console.log('[AutoAssign] Da一覧:', staff.filter(s=>s.active&&s.role==='Da').map(s=>`${s.name}(id=${s.id})`));
+  console.log('[AutoAssign] Dr一覧:', staff.filter(s=>s.active&&s.role==='Dr').map(s=>`${s.name}(id=${s.id})`));
+
   allAppts.forEach(a => {
     const startMin = toMin(a.time);
     const dur = a.duration || 30;
@@ -1302,6 +1306,7 @@ function autoAssign() {
       if (roles.needDa || (isDrC && !apptRef.assignDa)) {
         if (!apptRef.assignDa) {
           let avail = getAvailableWithBreak('Da', startMin, dur, a.id);
+          if (isDrC) console.log(`[AutoAssign] ${a._ch.name} ${a.time} DA候補: Da=${avail.map(s=>s.name)}, roles=${JSON.stringify(roles)}`);
           if (!avail.length) {
             avail = getAvailableWithBreak('Dh', startMin, dur, a.id);
           }
