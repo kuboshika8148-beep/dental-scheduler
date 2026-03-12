@@ -1298,18 +1298,13 @@ function autoAssign() {
         }
       }
 
-      // DA配置（優先順: DA → DH → CS/DA）
-      // 岡崎Dr時は谷を優先配置
-      if (roles.needDa || (isDrC && !apptRef.assignDa)) {
+      // アシスト配置（Drチェアは常にアシスト必要）
+      // 優先順: DA → DH → CS/DA
+      if (roles.needDa || isDrC) {
         if (!apptRef.assignDa) {
           let avail = getAvailableWithBreak('Da', startMin, dur, a.id);
-          if (isDrC) console.log(`[AutoAssign] ${a._ch.name} ${a.time} DA候補: Da=${avail.map(s=>s.name)}, roles=${JSON.stringify(roles)}`);
-          if (!avail.length) {
-            avail = getAvailableWithBreak('Dh', startMin, dur, a.id);
-          }
-          if (!avail.length) {
-            avail = getAvailableWithBreak('CS/DA', startMin, dur, a.id);
-          }
+          if (!avail.length) avail = getAvailableWithBreak('Dh', startMin, dur, a.id);
+          if (!avail.length) avail = getAvailableWithBreak('CS/DA', startMin, dur, a.id);
           if (avail.length) {
             // 岡崎Dr → 谷を必ず優先配置
             let picked = null;
