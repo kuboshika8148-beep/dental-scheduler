@@ -1413,10 +1413,16 @@ function renderChairs() {
   const chairs = schedule.chairs||[];
   if (!chairs.length) { grid.innerHTML=''; em.style.display='block'; return; }
   em.style.display='none';
-  // メンテ系を上段、Dr系・特診・新患等を下段に2段表示
-  const isBtmChair = c => isDrChair(c.name) || /特診|新患|カウンセ/i.test(c.name);
-  const topChairs = chairs.filter(c => !isBtmChair(c));
+  // 3段表示: メンテ系→上段、Dr系・特診・新患→中段、カウンセリング→下段
+  const isTopChair = c => /^メンテ/i.test(c.name);
+  const isMidChair = c => isDrChair(c.name) || /特診|新患/i.test(c.name);
+  const isBtmChair = c => /カウンセ/i.test(c.name);
+  const topChairs = chairs.filter(c => isTopChair(c));
+  const midChairs = chairs.filter(c => isMidChair(c));
   const btmChairs = chairs.filter(c => isBtmChair(c));
+  // どこにも属さないものは上段に
+  const otherChairs = chairs.filter(c => !isTopChair(c) && !isMidChair(c) && !isBtmChair(c));
+  topChairs.push(...otherChairs);
 
   const mkCard = (ch, ci) => {
     const appts = ch.appointments||[];
@@ -1458,23 +1464,21 @@ function renderChairs() {
   };
 
   const topHTML = topChairs.map(ch => mkCard(ch, chairs.indexOf(ch))).join('');
+  const midHTML = midChairs.map(ch => mkCard(ch, chairs.indexOf(ch))).join('');
   const btmHTML = btmChairs.map(ch => mkCard(ch, chairs.indexOf(ch))).join('');
 
   grid.innerHTML = '';
-  if (topChairs.length) {
-    const topRow = document.createElement('div');
-    topRow.className = 'chair-row';
-    topRow.style.cssText = `display:grid;grid-template-columns:repeat(${topChairs.length},1fr);gap:8px;margin-bottom:12px;`;
-    topRow.innerHTML = topHTML;
-    grid.appendChild(topRow);
-  }
-  if (btmChairs.length) {
-    const btmRow = document.createElement('div');
-    btmRow.className = 'chair-row';
-    btmRow.style.cssText = `display:grid;grid-template-columns:repeat(${btmChairs.length},1fr);gap:8px;`;
-    btmRow.innerHTML = btmHTML;
-    grid.appendChild(btmRow);
-  }
+  const mkRow = (html, count) => {
+    if (!count) return;
+    const row = document.createElement('div');
+    row.className = 'chair-row';
+    row.style.cssText = `display:grid;grid-template-columns:repeat(${count},1fr);gap:8px;margin-bottom:12px;`;
+    row.innerHTML = html;
+    grid.appendChild(row);
+  };
+  mkRow(topHTML, topChairs.length);
+  mkRow(midHTML, midChairs.length);
+  mkRow(btmHTML, btmChairs.length);
 
   // ドラッグ＆ドロップでチェア並び替え
   grid.querySelectorAll('.ccard').forEach(card => {
