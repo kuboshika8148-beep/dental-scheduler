@@ -1116,18 +1116,13 @@ async function readImg() {
         }
         // DrチェアでDr名があればDrとして配置
         if (isDrC && drName) {
-          let drStaff = null;
-          if (drName === '院長') {
-            // 院長 = Drロールで最もIDが小さいスタッフ（メインDr）
-            drStaff = staff.filter(s=>s.active&&s.role==='Dr').sort((a,b)=>a.id-b.id)[0] || null;
-            if (drStaff) console.log(`[Dr配置] 院長 → ${drStaff.name}(id=${drStaff.id})`);
-          } else {
-            // 岡崎等の名前マッチ
-            drStaff = staff.find(s=>s.active&&s.role==='Dr'&&(s.name.includes(drName)||drName.includes(s.name.split(/\s/)[0])));
-            if (!drStaff) drStaff = ensureStaff(drName, 'Dr');
-            if (drStaff) drStaff.role = 'Dr';
-          }
-          if (drStaff) assignDr = drStaff.id;
+          // 名前でDrスタッフを検索（院長もそのまま名前マッチ）
+          let drStaff = staff.find(s=>s.active&&s.role==='Dr'&&(
+            s.name.includes(drName) || drName.includes(s.name.split(/\s/)[0])
+          ));
+          if (!drStaff) drStaff = ensureStaff(drName, 'Dr');
+          if (drStaff) { drStaff.role = 'Dr'; assignDr = drStaff.id; }
+          console.log(`[Dr配置] ${drName} → ${drStaff?.name||'不明'}(id=${drStaff?.id})`);
         }
 
         // existing_staffがあれば必ず配置（DH/DA）
