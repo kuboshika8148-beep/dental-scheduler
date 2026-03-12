@@ -1009,7 +1009,7 @@ async function readImg() {
 - 「誰でも」「衛生士誰でも」→is_free_slot:true
 - 空コマ・矯正・昼休み除外
 - ★existing_staffが最重要★: 各予約欄にDH西本、DH濱田、DH井上、DH橋村、DH堀川等の担当者記載がある。必ず名前部分のみ抽出(例:"DH西本"→"西本","DH 濱田"→"濱田")。記載がなければ空文字
-- ★existing_drも重要★: 「院長」「Dr岡崎」等のDr担当記載があれば抽出。"院長"→"院長","Dr岡崎"→"岡崎"。記載がなければ空文字`;
+- ★existing_dr★: 各予約欄に「院長」「Dr岡崎」等のDr担当者が明記されている場合のみ抽出。"院長"→"院長","Dr岡崎"→"岡崎"。★重要: 予約欄にDr名の記載が無い場合は必ず空文字""にすること。チェア名(Dr.5等)はDr名ではない。推測で埋めないこと★`;
 
   try {
     let parsed;
@@ -1108,15 +1108,9 @@ async function readImg() {
         let assignDh = '', assignDa = '', assignDr = '';
         const isDrC = isDrChair(ch.name);
 
-        // Dr抽出: existing_drまたはtreatmentから院長/Dr岡崎等を検出
-        let drName = a.existing_dr || '';
-        if (!drName) {
-          const drM = (a.treatment||'').match(/院長|[DＤ][rｒ]\s*([^\s,、()（）\.]+)/i);
-          if (drM) drName = drM[0] === '院長' ? '院長' : (drM[1] || drM[0].replace(/^[DＤ][rｒ]\s*/,''));
-        }
-        // DrチェアでDr名があればDrとして配置
+        // Dr抽出: existing_drフィールドからのみ（院長/Dr岡崎等）
+        const drName = a.existing_dr || '';
         if (isDrC && drName) {
-          // 名前でDrスタッフを検索（院長もそのまま名前マッチ）
           let drStaff = staff.find(s=>s.active&&s.role==='Dr'&&(
             s.name.includes(drName) || drName.includes(s.name.split(/\s/)[0])
           ));
