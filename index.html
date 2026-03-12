@@ -117,7 +117,7 @@ header{background:var(--ink);height:52px;padding:0 20px;display:flex;align-items
 .wlp.busy{border-color:var(--amber);background:#fef3c7;}
 
 /* ── CHAIR GRID ── */
-.cgrid{display:grid;gap:9px;}
+.cgrid{display:block;}
 .ccard{background:#fff;border:1px solid var(--border);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden;transition:border-color .15s,transform .15s;}
 .ccard.drag-over{border-color:var(--teal);border-width:2px;transform:scale(1.02);}
 .chead{padding:7px 12px;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);background:var(--bg);}
@@ -1424,10 +1424,11 @@ function renderChairs() {
   const chairs = schedule.chairs||[];
   if (!chairs.length) { grid.innerHTML=''; em.style.display='block'; return; }
   em.style.display='none';
-  // チェアごとに1列ずつ表示（最大5列）
-  grid.style.gridTemplateColumns = `repeat(${Math.min(chairs.length,5)},1fr)`;
+  // メンテ系を上段、Dr系・その他を下段に2段表示
+  const topChairs = chairs.filter(c => !isDrChair(c.name));
+  const btmChairs = chairs.filter(c => isDrChair(c.name));
 
-  grid.innerHTML = chairs.map((ch,ci) => {
+  const mkCard = (ch, ci) => {
     const appts = ch.appointments||[];
     const isMente = /^メンテ/i.test(ch.name);
     const isDr = isDrChair(ch.name);
@@ -1464,7 +1465,26 @@ function renderChairs() {
         <span class="cct">${appts.length}件</span>
       </div>${rows}
     </div>`;
-  }).join('');
+  };
+
+  const topHTML = topChairs.map(ch => mkCard(ch, chairs.indexOf(ch))).join('');
+  const btmHTML = btmChairs.map(ch => mkCard(ch, chairs.indexOf(ch))).join('');
+
+  grid.innerHTML = '';
+  if (topChairs.length) {
+    const topRow = document.createElement('div');
+    topRow.className = 'chair-row';
+    topRow.style.cssText = `display:grid;grid-template-columns:repeat(${topChairs.length},1fr);gap:8px;margin-bottom:12px;`;
+    topRow.innerHTML = topHTML;
+    grid.appendChild(topRow);
+  }
+  if (btmChairs.length) {
+    const btmRow = document.createElement('div');
+    btmRow.className = 'chair-row';
+    btmRow.style.cssText = `display:grid;grid-template-columns:repeat(${btmChairs.length},1fr);gap:8px;`;
+    btmRow.innerHTML = btmHTML;
+    grid.appendChild(btmRow);
+  }
 
   // ドラッグ＆ドロップでチェア並び替え
   grid.querySelectorAll('.ccard').forEach(card => {
