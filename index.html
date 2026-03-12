@@ -1310,25 +1310,20 @@ function autoAssign() {
           if (!avail.length) {
             avail = getAvailableWithBreak('CS/DA', startMin, dur, a.id);
           }
-          // 岡崎がDrの場合、谷を優先
-          if (avail.length && apptRef.assignDr) {
-            const drStaff = staff.find(s=>s.id===apptRef.assignDr);
-            if (drStaff && (drStaff.name.includes('岡崎') || drStaff.name.includes('岡﨑'))) {
-              const tani = avail.find(s=>s.name.includes('谷'));
-              if (tani) avail = [tani, ...avail.filter(s=>s.id!==tani.id)];
-            }
-          }
           if (avail.length) {
-            avail.sort((x,y)=>(load[x.id]||0)-(load[y.id]||0));
-            // 岡崎Dr時の谷優先: 谷が空いていれば先頭に
+            // 岡崎Dr → 谷を必ず優先配置
+            let picked = null;
             if (apptRef.assignDr) {
               const drStaff = staff.find(s=>s.id===apptRef.assignDr);
               if (drStaff && (drStaff.name.includes('岡崎') || drStaff.name.includes('岡﨑'))) {
-                const taniIdx = avail.findIndex(s=>s.name.includes('谷'));
-                if (taniIdx > 0) { const t = avail.splice(taniIdx,1)[0]; avail.unshift(t); }
+                picked = avail.find(s=>s.name.includes('谷'));
               }
             }
-            const s = avail[0];
+            if (!picked) {
+              avail.sort((x,y)=>(load[x.id]||0)-(load[y.id]||0));
+              picked = avail[0];
+            }
+            const s = picked;
             apptRef.assignDa = s.id;
             load[s.id] = (load[s.id]||0) + dur;
             if (endMin >= BREAK_WINDOW_START && endMin <= BREAK_WINDOW_END) assignBreak(s.id, endMin);
