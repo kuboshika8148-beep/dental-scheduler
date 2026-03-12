@@ -1260,11 +1260,13 @@ function autoAssign() {
     // Drチェア: Dr自動配置
     if (isDrC && !apptRef.assignDr) {
       const avail = getAvailableWithBreak('Dr', startMin, dur, a.id);
+      console.log(`[AutoAssign Dr] ${a._ch.name} ${a.time} assignDr=${apptRef.assignDr} Dr候補:`, avail.map(s=>`${s.name}(${s.id})`));
       if (avail.length) {
         avail.sort((x,y)=>(load[x.id]||0)-(load[y.id]||0));
         const s = avail[0];
         apptRef.assignDr = s.id;
         load[s.id] = (load[s.id]||0) + dur;
+        console.log(`[AutoAssign Dr] → ${s.name} 配置`);
       }
     } else if (isDrC && apptRef.assignDr) {
       load[apptRef.assignDr] = (load[apptRef.assignDr]||0) + dur;
