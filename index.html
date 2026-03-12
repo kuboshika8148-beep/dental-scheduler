@@ -1247,7 +1247,24 @@ function autoAssign() {
   console.log('[AutoAssign] Da一覧:', staff.filter(s=>s.active&&s.role==='Da').map(s=>`${s.name}(id=${s.id})`));
   console.log('[AutoAssign] Dr一覧:', staff.filter(s=>s.active&&s.role==='Dr').map(s=>`${s.name}(id=${s.id})`));
 
-  allAppts.forEach(a => {
+  // 岡崎チェアのアシストに谷を優先確保するため、岡崎Dr予約を先に処理
+  const isOkazakiAppt = a => {
+    if (!a.assignDr) return false;
+    const dr = staff.find(s=>s.id===a.assignDr);
+    return dr && (dr.name.includes('岡崎') || dr.name.includes('岡﨑'));
+  };
+  // 岡崎アポ→その他の順で処理
+  const okazakiAppts = allAppts.filter(a => {
+    const ref = a._ch.appointments.find(x=>x.id===a.id);
+    return ref && isOkazakiAppt(ref);
+  });
+  const otherAppts = allAppts.filter(a => {
+    const ref = a._ch.appointments.find(x=>x.id===a.id);
+    return !ref || !isOkazakiAppt(ref);
+  });
+  const sortedAppts = [...okazakiAppts, ...otherAppts];
+
+  sortedAppts.forEach(a => {
     const startMin = toMin(a.time);
     const dur = a.duration || 30;
     const endMin = startMin + dur;
