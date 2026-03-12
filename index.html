@@ -318,9 +318,10 @@ const SB_URL = "https://gvxdmldpimjvicllrhll.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd2eGRtbGRwaW1qdmljbGxyaGxsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0MTE2OTUsImV4cCI6MjA4Nzk4NzY5NX0.6EnrECgVy79VUNsbRQGL_shmhaWnPAq0BL2uYz6ilF0";
 
 const WORKING = new Set(['出勤','訪問','AM_MT','土曜出勤','第2土曜出勤','矯正当番_土','矯正当番_木','午前半休','午後半休']);
-const ASSIGN_ROLES = new Set(['Dh','Da','CS/DA','TC']);
+const ASSIGN_ROLES = new Set(['Dr','Dh','Da','CS/DA','TC']);
 
 const RC = {
+  Dr:      { label:'ドクター',   short:'Dr',    color:'#b91c1c', bg:'#fee2e2' },
   Dh:      { label:'歯科衛生士', short:'DH',    color:'#1d4ed8', bg:'#dbeafe' },
   Da:      { label:'歯科助手',   short:'DA',    color:'#15803d', bg:'#dcfce7' },
   'CS/DA': { label:'CS/DA',     short:'CS/DA', color:'#d97706', bg:'#fef9c3' },
@@ -562,7 +563,7 @@ function renderStaffPanel(working, offList) {
   working.forEach(s => { if(!byRole[s.role]) byRole[s.role]=[]; byRole[s.role].push(s); });
 
   let html = '';
-  ['Dh','Da','CS/DA','TC'].forEach(role => {
+  ['Dr','Dh','Da','CS/DA','TC'].forEach(role => {
     const mem = byRole[role]||[];
     if (!mem.length) return;
     const cfg = RC[role];
@@ -1115,11 +1116,18 @@ async function readImg() {
         }
         // DrチェアでDr名があればDrとして配置
         if (isDrC && drName) {
-          const drStaff = ensureStaff(drName, 'Dr');
-          if (drStaff) {
-            drStaff.role = 'Dr'; // 確実にDrロールに
-            assignDr = drStaff.id;
+          let drStaff = null;
+          if (drName === '院長') {
+            // 院長 = Drロールで最もIDが小さいスタッフ（メインDr）
+            drStaff = staff.filter(s=>s.active&&s.role==='Dr').sort((a,b)=>a.id-b.id)[0] || null;
+            if (drStaff) console.log(`[Dr配置] 院長 → ${drStaff.name}(id=${drStaff.id})`);
+          } else {
+            // 岡崎等の名前マッチ
+            drStaff = staff.find(s=>s.active&&s.role==='Dr'&&(s.name.includes(drName)||drName.includes(s.name.split(/\s/)[0])));
+            if (!drStaff) drStaff = ensureStaff(drName, 'Dr');
+            if (drStaff) drStaff.role = 'Dr';
           }
+          if (drStaff) assignDr = drStaff.id;
         }
 
         // existing_staffがあれば必ず配置（DH/DA）
