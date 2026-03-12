@@ -1424,9 +1424,10 @@ function renderChairs() {
   const chairs = schedule.chairs||[];
   if (!chairs.length) { grid.innerHTML=''; em.style.display='block'; return; }
   em.style.display='none';
-  // メンテ系を上段、Dr系・その他を下段に2段表示
-  const topChairs = chairs.filter(c => !isDrChair(c.name));
-  const btmChairs = chairs.filter(c => isDrChair(c.name));
+  // メンテ系を上段、Dr系・特診・新患等を下段に2段表示
+  const isBtmChair = c => isDrChair(c.name) || /特診|新患|カウンセ/i.test(c.name);
+  const topChairs = chairs.filter(c => !isBtmChair(c));
+  const btmChairs = chairs.filter(c => isBtmChair(c));
 
   const mkCard = (ch, ci) => {
     const appts = ch.appointments||[];
