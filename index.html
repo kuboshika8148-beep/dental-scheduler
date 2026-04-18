@@ -1335,8 +1335,9 @@ function autoAssign() {
     const roles = getChairRoles(a._ch.name, a.treatment, a.treat_type);
     const isDrC = isDrChair(a._ch.name);
 
-    // Drチェア: Dr自動配置
-    if (isDrC && !apptRef.assignDr) {
+    // Drチェア: Dr自動配置（ただし処置がDH系(メンテ/SRP/SPT/P検等)の場合はDr不要）
+    const needsDr = isDrC && roles.needDa;
+    if (needsDr && !apptRef.assignDr) {
       const avail = getAvailableWithBreak('Dr', startMin, dur, a.id);
       console.log(`[AutoAssign Dr] ${a._ch.name} ${a.time} assignDr=${apptRef.assignDr} Dr候補:`, avail.map(s=>`${s.name}(${s.id})`));
       if (avail.length) {
