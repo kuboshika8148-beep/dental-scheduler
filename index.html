@@ -637,6 +637,24 @@ function addManual() {
 }
 
 // ══════════════════════════════════════════════
+// STAFF ENSURE（担当名 → スタッフ解決、無ければ仮登録）
+// ══════════════════════════════════════════════
+function ensureStaff(name, defaultRole) {
+  if (!name) return null;
+  const found = staff.find(s => s.active && (
+    name.includes(s.name.split(/\s/)[0]) || s.name.split(/\s/)[0].includes(name)
+  ));
+  if (found) return found;
+  const fromTreat = staff.find(s => s.active && s.name.includes(name));
+  if (fromTreat) return fromTreat;
+  manualId++;
+  const newS = { id: manualId, name, role: defaultRole, active: true, source: 'auto' };
+  staff.push(newS);
+  console.log(`[Staff] "${name}" を${defaultRole}として仮登録 (id=${manualId})`);
+  return newS;
+}
+
+// ══════════════════════════════════════════════
 // MORITA (Genifix) 予約取得
 // ══════════════════════════════════════════════
 async function loadMoritaAppointments() {
@@ -657,14 +675,47 @@ async function loadMoritaAppointments() {
     const chairs = (data.chairs||[]).map((ch,i)=>({
       ...ch,
       color: ch.color || CHAIR_COLORS[i%CHAIR_COLORS.length],
-      appointments: (ch.appointments||[]).map(a=>({
-        ...a,
-        id: Math.random().toString(36).slice(2,9),
-        isFree: a.is_free_slot || isFreeSlot(a),
-        assignDh: matchStaff(a.existing_staff,'Dh'),
-        assignDa: matchStaff(a.existing_staff,'Da'),
-        assignTC: matchStaff(a.existing_staff,'TC'),
-      }))
+      appointments: (ch.appointments||[]).map(a=>{
+        const roles = getChairRoles(ch.name, a.treatment, a.treat_type);
+        const isDrC = isDrChair(ch.name);
+        let assignDh='', assignDa='', assignDr='';
+
+        // Dr: モリタの existing_dr（院長/岡崎等）が来ていれば登録
+        const drName = a.existing_dr || '';
+        if (isDrC && drName) {
+          let drStaff = staff.find(s=>s.active&&s.role==='Dr'&&(
+            s.name.includes(drName) || drName.includes(s.name.split(/\s/)[0])
+          ));
+          if (!drStaff) drStaff = ensureStaff(drName, 'Dr');
+          if (drStaff) { drStaff.role = 'Dr'; assignDr = drStaff.id; }
+        }
+
+        // DH/DA: existing_staff → 処置内容から推定（メンテ等なら DH）
+        const staffName = a.existing_staff || '';
+        if (staffName) {
+          const guessRole = roles.needDh ? 'Dh' : 'Da';
+          const s = ensureStaff(staffName, guessRole);
+          if (s) {
+            if (s.role === 'Dh') assignDh = s.id;
+            else assignDa = s.id;
+          }
+        }
+        // treatment 本文の DH○○ 記述も拾う
+        if (!assignDh && !assignDa) {
+          const m = (a.treatment||'').match(/[DＤ][HＨ]\s*([^\s,、()（）]+)/i);
+          if (m) {
+            const s = ensureStaff(m[1], 'Dh');
+            if (s) assignDh = s.id;
+          }
+        }
+
+        return {
+          ...a,
+          id: Math.random().toString(36).slice(2,9),
+          isFree: a.is_free_slot || isFreeSlot(a),
+          assignDh, assignDa, assignDr, assignTC:'',
+        };
+      })
     }));
 
     schedule = { date, chairs };
@@ -1141,25 +1192,6 @@ async function readImg() {
 
     // デバッグ: マッチング前のスタッフ一覧
     console.log('[Staff Match] 出勤スタッフ:', staff.filter(s=>s.active).map(s=>`${s.name}(${s.role},id=${s.id})`));
-
-    // PDFの担当名からスタッフを自動登録（見つからなければ仮登録）
-    function ensureStaff(name, defaultRole) {
-      if (!name) return null;
-      // 既存スタッフから検索
-      const found = staff.find(s => s.active && (
-        name.includes(s.name.split(/\s/)[0]) || s.name.split(/\s/)[0].includes(name)
-      ));
-      if (found) return found;
-      // treatmentからも検索
-      const fromTreat = staff.find(s => s.active && s.name.includes(name));
-      if (fromTreat) return fromTreat;
-      // 見つからない → 仮登録
-      manualId++;
-      const newS = { id: manualId, name: name, role: defaultRole, active: true, source: 'pdf' };
-      staff.push(newS);
-      console.log(`[Staff] PDF担当 "${name}" を${defaultRole}として仮登録 (id=${manualId})`);
-      return newS;
-    }
 
     parsed.chairs = (parsed.chairs||[]).map((ch,i)=>({
       ...ch,

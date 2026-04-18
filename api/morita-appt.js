@@ -12,11 +12,31 @@ function isFreeText(text) {
   return FREE_KEYWORDS.some(k => text.includes(k));
 }
 
-function stripFreeMarker(name) {
-  // "DH誰でも" → ""（担当未定として扱う）
-  if (!name) return '';
-  if (FREE_KEYWORDS.some(k => name.includes(k))) return '';
-  return name.replace(/^(DH|Dr\.?|Dr|歯科医師|衛生士)\s*/i, '').trim();
+// Genifix の staffName を役職別フィールドに振り分ける
+// 返り値: { existing_staff, existing_dr, treat_type, is_free_slot }
+//   existing_staff: DH/TC/その他スタッフ名（プレフィックス除去済）
+//   existing_dr: 院長 or Dr名（Drチェア用）
+//   treat_type: 'DH' | 'Dr' | '' （dental-scheduler の chair-role 推定ヒント）
+function parseStaff(raw) {
+  const name = (raw || '').trim();
+  if (!name) return { existing_staff: '', existing_dr: '', treat_type: '' };
+  if (FREE_KEYWORDS.some(k => name.includes(k))) {
+    return { existing_staff: '', existing_dr: '', treat_type: '', is_free_slot: true };
+  }
+  // Dr系: "院長", "Dr岡崎", "岡崎Dr" 等
+  if (name === '院長') return { existing_staff: '', existing_dr: '院長', treat_type: 'Dr' };
+  const mDrPrefix = name.match(/^(?:Dr\.?|[DＤ][rｒ])\s*(.+)$/i);
+  if (mDrPrefix) return { existing_staff: '', existing_dr: mDrPrefix[1].trim(), treat_type: 'Dr' };
+  const mDrSuffix = name.match(/^(.+?)\s*(?:Dr\.?|[DＤ][rｒ])$/i);
+  if (mDrSuffix) return { existing_staff: '', existing_dr: mDrSuffix[1].trim(), treat_type: 'Dr' };
+  // DH系
+  const mDh = name.match(/^(?:DH|[DＤ][HＨ]|歯科衛生士|衛生士)\s*(.+)$/i);
+  if (mDh) return { existing_staff: mDh[1].trim(), existing_dr: '', treat_type: 'DH' };
+  // TC系
+  const mTc = name.match(/^(?:TC|Ｔ[CＣ])\s*(.+)$/i);
+  if (mTc) return { existing_staff: mTc[1].trim(), existing_dr: '', treat_type: '' };
+  // プレフィックス無し → そのままスタッフ名として扱う
+  return { existing_staff: name, existing_dr: '', treat_type: '' };
 }
 
 export default async function handler(req, res) {
@@ -50,16 +70,17 @@ export default async function handler(req, res) {
     for (const a of appts) {
       const chairName = a.chairName || '不明';
       if (!chairMap.has(chairName)) chairMap.set(chairName, []);
-      const isFreeStaff = isFreeText(a.staffName);
+      const parsed = parseStaff(a.staffName);
       const isFreeTreat = isFreeText(a.treatmentName);
-      const existingStaff = isFreeStaff ? '' : stripFreeMarker(a.staffName || '');
       chairMap.get(chairName).push({
         time: a.startTime || '',
         patient: a.patientName || '',
         treatment: a.treatmentName || a.complaint || '',
         duration: a.durationMin || 30,
-        is_free_slot: isFreeStaff || isFreeTreat,
-        existing_staff: existingStaff,
+        is_free_slot: parsed.is_free_slot || isFreeTreat,
+        existing_staff: parsed.existing_staff,
+        existing_dr: parsed.existing_dr,
+        treat_type: parsed.treat_type,
         _patientNo: a.patientNo || '',
         _reserveId: a.reserveId,
       });
