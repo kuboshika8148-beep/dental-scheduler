@@ -1685,7 +1685,8 @@ function renderRow(a, chairName) {
         ${drHint}
       </div>`;
     };
-    staffCols = mkDrSel() + mkSel('Da','assignDa','s-da');
+    // メンテ等のDH処置(roles.needDh)ならDrチェアでも DH 枠を出す
+    staffCols = mkDrSel() + (roles.needDh ? mkSel('Dh','assignDh','s-dh') : mkSel('Da','assignDa','s-da'));
   } else if (roles.needDh && roles.needDa) {
     gridCols = '42px 1fr 80px 80px';
     staffCols = mkSel('Da','assignDa','s-da') + mkSel('Dh','assignDh','s-dh');
