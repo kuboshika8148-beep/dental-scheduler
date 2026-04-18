@@ -364,7 +364,7 @@ const FREE_KEYWORDS = ['誰でも','だれでも','フリー','自由','空き',
 
 // Dr.チェアかどうか判定（DAが必要なチェア）
 function isDrChair(chairName) {
-  return /Dr|ドクター|dr/i.test(chairName);
+  return /Dr|ドクター|dr|特診/i.test(chairName);
 }
 
 // チェア別スタッフ配置ルール
@@ -641,12 +641,20 @@ function addManual() {
 // ══════════════════════════════════════════════
 function ensureStaff(name, defaultRole) {
   if (!name) return null;
-  const found = staff.find(s => s.active && (
-    name.includes(s.name.split(/\s/)[0]) || s.name.split(/\s/)[0].includes(name)
-  ));
-  if (found) return found;
-  const fromTreat = staff.find(s => s.active && s.name.includes(name));
-  if (fromTreat) return fromTreat;
+  const nameMatches = (s) => (
+    name.includes(s.name.split(/\s/)[0]) || s.name.split(/\s/)[0].includes(name) || s.name.includes(name)
+  );
+  // まず active/inactive を問わず既存スタッフを探す（inactive = 本日休み/除外）
+  const anyMatch = staff.find(nameMatches);
+  if (anyMatch) {
+    if (!anyMatch.active) {
+      // 休み/除外中のスタッフ → 配置しない（予約側の担当欄は空）
+      console.log(`[Staff] "${name}" はマッチしたが ${anyMatch.name} が休み/除外中 → 配置スキップ`);
+      return null;
+    }
+    return anyMatch;
+  }
+  // 見つからない → 仮登録
   manualId++;
   const newS = { id: manualId, name, role: defaultRole, active: true, source: 'auto' };
   staff.push(newS);
