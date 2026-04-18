@@ -251,6 +251,16 @@ header{background:var(--ink);height:52px;padding:0 20px;display:flex;align-items
     </div>
   </div>
 
+  <!-- Morita direct fetch -->
+  <div class="pnl">
+    <div class="ph">🦷 モリタから予約取得</div>
+    <div class="pb">
+      <button class="rbtn" id="mrBtn" onclick="loadMoritaAppointments()" style="margin-top:0;">🦷 モリタから取得</button>
+      <div class="ld" id="ldMr"><div class="sp"></div>モリタから取得中…</div>
+      <p class="hint" style="margin-top:7px;text-align:center;">対象日のシフトで指定した日を取得</p>
+    </div>
+  </div>
+
   <!-- Upload -->
   <div class="pnl">
     <div class="ph">📋 アポイント表を読み取る</div>
@@ -624,6 +634,57 @@ function addManual() {
   document.getElementById('sName').value = '';
   renderAll();
   toast(`${name} を追加しました`,'ok');
+}
+
+// ══════════════════════════════════════════════
+// MORITA (Genifix) 予約取得
+// ══════════════════════════════════════════════
+async function loadMoritaAppointments() {
+  const date = document.getElementById('datePick').value;
+  if (!date) { toast('対象日を選択してください','ng'); return; }
+
+  const btn = document.getElementById('mrBtn');
+  const ld = document.getElementById('ldMr');
+  btn.disabled = true;
+  ld.style.display = 'flex';
+  toast('モリタから予約を取得中…','info');
+
+  try {
+    const res = await fetch(`/api/morita-appt?date=${encodeURIComponent(date)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '取得失敗');
+
+    const chairs = (data.chairs||[]).map((ch,i)=>({
+      ...ch,
+      color: ch.color || CHAIR_COLORS[i%CHAIR_COLORS.length],
+      appointments: (ch.appointments||[]).map(a=>({
+        ...a,
+        id: Math.random().toString(36).slice(2,9),
+        isFree: a.is_free_slot || isFreeSlot(a),
+        assignDh: matchStaff(a.existing_staff,'Dh'),
+        assignDa: matchStaff(a.existing_staff,'Da'),
+        assignTC: matchStaff(a.existing_staff,'TC'),
+      }))
+    }));
+
+    schedule = { date, chairs };
+    document.getElementById('subTtl').textContent = fmtJP(date);
+    renderAll();
+
+    const tot = chairs.reduce((s,c)=>s+c.appointments.length,0);
+    const freeCount = chairs.reduce((s,c)=>s+c.appointments.filter(a=>a.isFree).length,0);
+    if (tot === 0) {
+      toast('予約データが見つかりませんでした','ng');
+    } else {
+      toast(`${chairs.length}チェア・${tot}件取得 (うち「誰でも」${freeCount}件) ✓`,'ok');
+    }
+  } catch(e) {
+    console.error(e);
+    toast('モリタからの取得に失敗しました','ng');
+  } finally {
+    btn.disabled = false;
+    ld.style.display = 'none';
+  }
 }
 
 // ══════════════════════════════════════════════
