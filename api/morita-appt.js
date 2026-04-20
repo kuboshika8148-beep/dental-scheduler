@@ -51,9 +51,13 @@ export default async function handler(req, res) {
   }
 
   try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (process.env.MORITA_PROXY_SECRET) {
+      headers['X-Morita-Secret'] = process.env.MORITA_PROXY_SECRET;
+    }
     const upstream = await fetch(MORITA_PROXY, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ date, days: 1 }),
     });
 
